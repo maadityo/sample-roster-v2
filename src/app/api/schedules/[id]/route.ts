@@ -2,6 +2,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/lib/api-helpers";
 import { startOfDay } from "date-fns";
+import { z } from "zod";
+
+const patchScheduleSchema = z.object({
+  date: z.string().optional(),
+  title: z.string().max(200).nullable().optional(),
+  notes: z.string().max(1000).nullable().optional(),
+  isHoliday: z.boolean().optional(),
+});
 
 // PATCH /api/schedules/[id]  (Admin only)
 export async function PATCH(
@@ -14,8 +22,15 @@ export async function PATCH(
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const body = await req.json();
-  const { date, title, notes, isHoliday } = body;
+  const raw = await req.json();
+  const parsed = patchScheduleSchema.safeParse(raw);
+  if (!parsed.success) {
+    return NextResponse.json(
+      { error: "Invalid request", details: parsed.error.flatten() },
+      { status: 400 }
+    );
+  }
+  const { date, title, notes, isHoliday } = parsed.data;
 
   const existing = await prisma.schedule.findUnique({
     where: { id: params.id },

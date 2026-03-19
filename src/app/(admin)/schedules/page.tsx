@@ -30,6 +30,7 @@ export default async function AdminSchedulesPage() {
       absenceId: a.id,
       status: a.status,
       reason: a.reason,
+      adminNote: a.adminNote,
       user: a.user,
     })),
   }));

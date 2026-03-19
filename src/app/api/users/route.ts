@@ -3,6 +3,13 @@ import { prisma } from "@/lib/prisma";
 import { requireAdmin } from "@/lib/api-helpers";
 import { startOfMonth, endOfMonth } from "date-fns";
 import { MAX_ABSENCES_PER_MONTH } from "@/lib/constants";
+import { z } from "zod";
+
+const createUserSchema = z.object({
+  email: z.string().email(),
+  name: z.string().max(100).optional(),
+  role: z.enum(["KAKAK", "ADMIN"]).optional(),
+});
 
 // GET /api/users  (Admin only) — list all kakaks with monthly absence stats
 export async function GET(req: NextRequest) {
@@ -57,12 +64,15 @@ export async function POST(req: NextRequest) {
   const { session, error } = await requireAdmin();
   if (error) return error;
 
-  const body = await req.json();
-  const { email, name, role } = body;
-
-  if (!email) {
-    return NextResponse.json({ error: "email is required" }, { status: 400 });
+  const raw = await req.json();
+  const parsed = createUserSchema.safeParse(raw);
+  if (!parsed.success) {
+    return NextResponse.json(
+      { error: "Invalid request", details: parsed.error.flatten() },
+      { status: 400 }
+    );
   }
+  const { email, name, role } = parsed.data;
 
   const user = await prisma.user.upsert({
     where: { email },

@@ -20,16 +20,14 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       return session;
     },
     async signIn({ user }) {
-      // Only allow users that are registered in the system
-      // Admins can add new kakaks via the users API
+      // Only allow users that have been pre-registered by an admin
       if (!user.email) return false;
       const dbUser = await prisma.user.findUnique({
         where: { email: user.email },
+        select: { isActive: true },
       });
-      // Allow first-time sign-in; user will be created by the adapter
-      // but mark as inactive until admin approves – or open sign-up:
-      // For open sign-up just return true
-      return true;
+      // Deny sign-in if user not pre-registered or deactivated by admin
+      return dbUser !== null && dbUser.isActive;
     },
   },
   pages: {

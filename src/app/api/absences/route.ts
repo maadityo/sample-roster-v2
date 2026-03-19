@@ -6,6 +6,14 @@ import {
   MAX_ABSENCES_PER_MONTH,
   MAX_ABSENCES_PER_SUNDAY,
 } from "@/lib/constants";
+import { z } from "zod";
+
+const createAbsenceSchema = z.object({
+  scheduleId: z.string().min(1),
+  reason: z.string().max(500).optional(),
+  isOverride: z.boolean().optional(),
+  adminNote: z.string().max(500).optional(),
+});
 
 // GET /api/absences
 // Returns the calling user's absences (kakak) or all absences (admin)
@@ -48,12 +56,15 @@ export async function POST(req: NextRequest) {
   const { session, error } = await requireAuth();
   if (error) return error;
 
-  const body = await req.json();
-  const { scheduleId, reason, isOverride, adminNote } = body;
-
-  if (!scheduleId) {
-    return NextResponse.json({ error: "scheduleId is required" }, { status: 400 });
+  const raw = await req.json();
+  const parsed = createAbsenceSchema.safeParse(raw);
+  if (!parsed.success) {
+    return NextResponse.json(
+      { error: "Invalid request", details: parsed.error.flatten() },
+      { status: 400 }
+    );
   }
+  const { scheduleId, reason, isOverride, adminNote } = parsed.data;
 
   const schedule = await prisma.schedule.findUnique({
     where: { id: scheduleId },

@@ -1,6 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/lib/api-helpers";
+import { z } from "zod";
+
+const patchAbsenceSchema = z.object({
+  status: z.enum(["APPROVED", "REJECTED", "CANCELLED"]).optional(),
+  reason: z.string().max(500).optional(),
+  adminNote: z.string().max(500).optional(),
+});
 
 // PATCH /api/absences/[id]
 // Kakak: can cancel their own pending absence
@@ -26,7 +33,15 @@ export async function PATCH(
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const body = await req.json();
+  const raw = await req.json();
+  const parsed = patchAbsenceSchema.safeParse(raw);
+  if (!parsed.success) {
+    return NextResponse.json(
+      { error: "Invalid request", details: parsed.error.flatten() },
+      { status: 400 }
+    );
+  }
+  const body = parsed.data;
 
   if (!isAdmin) {
     // Kakak may only cancel their own PENDING absence

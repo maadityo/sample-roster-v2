@@ -2,6 +2,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/lib/api-helpers";
 import { startOfDay, addDays } from "date-fns";
+import { z } from "zod";
+
+const createScheduleSchema = z.object({
+  date: z.string().min(1),
+  title: z.string().max(200).optional(),
+  notes: z.string().max(1000).optional(),
+  isHoliday: z.boolean().optional(),
+});
 
 // GET /api/schedules
 // Kakaks: see upcoming Sundays with their own absence status
@@ -56,21 +64,24 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const body = await req.json();
-  const { date, title, notes, isHoliday } = body;
-
-  if (!date) {
-    return NextResponse.json({ error: "date is required" }, { status: 400 });
+  const raw = await req.json();
+  const parsed = createScheduleSchema.safeParse(raw);
+  if (!parsed.success) {
+    return NextResponse.json(
+      { error: "Invalid request", details: parsed.error.flatten() },
+      { status: 400 }
+    );
   }
+  const { date, title, notes, isHoliday } = parsed.data;
 
-  const parsed = startOfDay(new Date(date));
-  if (isNaN(parsed.getTime())) {
+  const parsedDate = startOfDay(new Date(date));
+  if (isNaN(parsedDate.getTime())) {
     return NextResponse.json({ error: "Invalid date" }, { status: 400 });
   }
 
   const schedule = await prisma.schedule.create({
     data: {
-      date: parsed,
+      date: parsedDate,
       title: title ?? null,
       notes: notes ?? null,
       isHoliday: isHoliday ?? false,
