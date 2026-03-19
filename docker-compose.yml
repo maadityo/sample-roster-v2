@@ -1,0 +1,65 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: kakak-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: kakak
+      POSTGRES_PASSWORD: kakak_secret
+      POSTGRES_DB: kakak
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kakak -d kakak"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kakak-app
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      # ── Key Vault (production) ──────────────────────────────────
+      # Set ini dan semua secret otomatis diambil dari Azure Key Vault
+      AZURE_KEY_VAULT_URL: ${AZURE_KEY_VAULT_URL:-https://akv-prod-eau-01.vault.azure.net/}
+
+      # ── Database (non-secret, aman di sini untuk local) ────────
+      DATABASE_URL: postgresql://kakak:kakak_secret@db:5432/kakak?schema=public
+
+      # ── Fallback jika tidak pakai Key Vault (local dev) ────────
+      NEXTAUTH_URL: http://localhost:3000
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:-}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+
+      # ── App config ──────────────────────────────────────────────
+      MAX_ABSENCES_PER_MONTH: ${MAX_ABSENCES_PER_MONTH:-2}
+      MAX_ABSENCES_PER_SUNDAY: ${MAX_ABSENCES_PER_SUNDAY:-3}
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # One-off: jalankan migration + seed saat pertama kali
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kakak-migrate
+    environment:
+      DATABASE_URL: postgresql://kakak:kakak_secret@db:5432/kakak?schema=public
+    depends_on:
+      db:
+        condition: service_healthy
+    command: >
+      sh -c "npx prisma migrate deploy && npx tsx prisma/seed.ts"
+    restart: "no"
+
+volumes:
+  postgres_data:
