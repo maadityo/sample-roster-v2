@@ -1,0 +1,144 @@
+import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+import { requireAuth } from "@/lib/api-helpers";
+import { startOfMonth, endOfMonth } from "date-fns";
+import {
+  MAX_ABSENCES_PER_MONTH,
+  MAX_ABSENCES_PER_SUNDAY,
+} from "@/lib/constants";
+
+// GET /api/absences
+// Returns the calling user's absences (kakak) or all absences (admin)
+export async function GET(req: NextRequest) {
+  const { session, error } = await requireAuth();
+  if (error) return error;
+
+  const { searchParams } = new URL(req.url);
+  const month = searchParams.get("month"); // format: "2026-03"
+  const userId = searchParams.get("userId"); // admin: filter by user
+
+  let dateFilter = {};
+  if (month) {
+    const [year, m] = month.split("-").map(Number);
+    const ref = new Date(year, m - 1, 1);
+    dateFilter = { date: { gte: startOfMonth(ref), lte: endOfMonth(ref) } };
+  }
+
+  const isAdmin = session!.user.role === "ADMIN";
+  const targetUserId =
+    isAdmin && userId ? userId : session!.user.id;
+
+  const absences = await prisma.absence.findMany({
+    where: {
+      ...(isAdmin && !userId ? {} : { userId: targetUserId }),
+      schedule: Object.keys(dateFilter).length ? dateFilter : undefined,
+    },
+    orderBy: { schedule: { date: "asc" } },
+    include: {
+      schedule: { select: { date: true, title: true } },
+      user: isAdmin ? { select: { name: true, email: true } } : false,
+    },
+  });
+
+  return NextResponse.json(absences);
+}
+
+// POST /api/absences  — kakak submits an absence request
+export async function POST(req: NextRequest) {
+  const { session, error } = await requireAuth();
+  if (error) return error;
+
+  const body = await req.json();
+  const { scheduleId, reason, isOverride, adminNote } = body;
+
+  if (!scheduleId) {
+    return NextResponse.json({ error: "scheduleId is required" }, { status: 400 });
+  }
+
+  const schedule = await prisma.schedule.findUnique({
+    where: { id: scheduleId },
+  });
+  if (!schedule) {
+    return NextResponse.json({ error: "Schedule not found" }, { status: 404 });
+  }
+
+  const isAdmin = session!.user.role === "ADMIN";
+
+  // Check for duplicate
+  const existing = await prisma.absence.findUnique({
+    where: { userId_scheduleId: { userId: session!.user.id, scheduleId } },
+  });
+  if (existing) {
+    return NextResponse.json(
+      { error: "You already have an absence for this Sunday" },
+      { status: 409 }
+    );
+  }
+
+  // ── Business rule checks (skipped for admin override) ─────────────────────
+  if (!isOverride) {
+    const monthStart = startOfMonth(schedule.date);
+    const monthEnd = endOfMonth(schedule.date);
+
+    const personalMonthlyCount = await prisma.absence.count({
+      where: {
+        userId: session!.user.id,
+        status: { in: ["APPROVED", "PENDING"] },
+        schedule: { date: { gte: monthStart, lte: monthEnd } },
+      },
+    });
+
+    if (personalMonthlyCount >= MAX_ABSENCES_PER_MONTH && !isAdmin) {
+      return NextResponse.json(
+        {
+          error: `Monthly absence limit (${MAX_ABSENCES_PER_MONTH}) reached`,
+          code: "PERSONAL_LIMIT_EXCEEDED",
+        },
+        { status: 422 }
+      );
+    }
+
+    const teamAbsenceCount = await prisma.absence.count({
+      where: {
+        scheduleId,
+        status: { in: ["APPROVED", "PENDING"] },
+      },
+    });
+
+    if (teamAbsenceCount >= MAX_ABSENCES_PER_SUNDAY && !isAdmin) {
+      return NextResponse.json(
+        {
+          error: `Team absence limit (${MAX_ABSENCES_PER_SUNDAY}) reached for this Sunday`,
+          code: "TEAM_LIMIT_EXCEEDED",
+        },
+        { status: 422 }
+      );
+    }
+  }
+
+  const absence = await prisma.absence.create({
+    data: {
+      userId: session!.user.id,
+      scheduleId,
+      reason: reason ?? null,
+      isOverride: isAdmin && !!isOverride,
+      adminNote: isAdmin ? (adminNote ?? null) : null,
+      status: isAdmin ? "APPROVED" : "PENDING",
+    },
+    include: { schedule: { select: { date: true, title: true } } },
+  });
+
+  // Log admin overrides
+  if (isAdmin && isOverride) {
+    await prisma.auditLog.create({
+      data: {
+        userId: session!.user.id,
+        action: "OVERRIDE_ABSENCE",
+        entityId: absence.id,
+        details: { reason, adminNote, scheduleId },
+      },
+    });
+  }
+
+  return NextResponse.json(absence, { status: 201 });
+}
