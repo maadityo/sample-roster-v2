@@ -39,6 +39,12 @@ export interface ScheduleWithChurches {
   notes: string | null;
   isHoliday: boolean;
   churches: ChurchWithServices[];
+  /** FIFO-ordered list of kakaks who are absent on this Sunday (PENDING/APPROVED) */
+  absentKakaks: { userId: string; name: string | null }[];
+  /** True when the full-team absence quota for this Sunday is reached */
+  isFullyBooked: boolean;
+  /** Service IDs the kakak plans to attend on this Sunday (null if not saved yet) */
+  myServicePlan: string[] | null;
 }
 
 export interface AbsenceWithDetails {

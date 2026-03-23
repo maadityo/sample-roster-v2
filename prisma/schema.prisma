@@ -72,10 +72,11 @@ model User {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
-  accounts  Account[]
-  sessions  Session[]
-  absences  Absence[]
-  auditLogs AuditLog[]
+  accounts      Account[]
+  sessions      Session[]
+  absences      Absence[]
+  auditLogs     AuditLog[]
+  schedulePlans SchedulePlan[]
 }
 
 /// A church location
@@ -111,7 +112,8 @@ model Schedule {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  absences Absence[]
+  absences      Absence[]
+  schedulePlans SchedulePlan[]
 
   @@unique([date])
   @@index([date])
@@ -139,6 +141,22 @@ model Absence {
   @@index([scheduleId])
   @@index([serviceId])
   @@index([status])
+}
+
+/// Kakak's intended service plan for a hadir (attending) Sunday
+model SchedulePlan {
+  id         String   @id @default(cuid())
+  userId     String
+  scheduleId String
+  serviceIds String[]
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  schedule Schedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, scheduleId])
+  @@index([userId])
 }
 
 /// Audit trail for admin overrides and important actions

@@ -8,6 +8,7 @@ import {
   Users,
   LogOut,
   ClipboardList,
+  Table2,
 } from "lucide-react";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
@@ -25,6 +26,7 @@ export function AdminNavBar({ user }: AdminNavBarProps) {
 
   const links = [
     { href: "/admin/dashboard", label: "Dashboard", icon: LayoutDashboard },
+    { href: "/admin/roster", label: "Roster", icon: Table2 },
     { href: "/admin/schedules", label: "Schedules", icon: CalendarDays },
     { href: "/admin/kakaks", label: "Kakaks", icon: Users },
     { href: "/admin/audit", label: "Audit", icon: ClipboardList },

@@ -1,7 +1,7 @@
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { startOfMonth, endOfMonth, addMonths } from "date-fns";
-import { MAX_ABSENCES_PER_MONTH } from "@/lib/constants";
+import { MAX_ABSENCES_PER_MONTH, MAX_ABSENCES_PER_SUNDAY } from "@/lib/constants";
 import { AbsenceSubmitForm } from "@/components/kakak/absence-submit-form";
 
 export default async function KakakDashboard() {
@@ -23,7 +23,8 @@ export default async function KakakDashboard() {
         include: {
           absences: {
             where: { status: { in: ["APPROVED", "PENDING"] } },
-            select: { userId: true, serviceId: true, status: true, id: true },
+            orderBy: { createdAt: "asc" },
+            select: { userId: true, serviceId: true, status: true, id: true, createdAt: true, user: { select: { name: true } } },
           },
         },
       }),
@@ -43,22 +44,37 @@ export default async function KakakDashboard() {
     ]);
 
   const monthlyAbsentIds = monthlyAbsenceScheduleIds.map((g) => g.scheduleId);
+  const hasSubmitted = monthlyAbsentIds.length > 0;
 
-  const currentMonthKey = `${targetMonth.getFullYear()}-${String(targetMonth.getMonth() + 1).padStart(2, "0")}`;
+  // Fetch saved service plans for this kakak (cross-device persistence)
+  const servicePlans = await prisma.schedulePlan.findMany({
+    where: { userId, scheduleId: { in: upcomingSchedules.map((s) => s.id) } },
+    select: { scheduleId: true, serviceIds: true },
+  });
+  const servicePlanMap = new Map(servicePlans.map((p) => [p.scheduleId, p.serviceIds]));
+
   const monthName = new Intl.DateTimeFormat("id-ID", { month: "long" })
     .format(targetMonth)
     .replace(/^\w/, (c) => c.toUpperCase());
 
   // Build the schedule+church/service tree for the UI
-  const scheduleData = upcomingSchedules.map((s) => {
+  const scheduleData = upcomingSchedules
+    .filter((s) => s.date.getDay() === 0) // Sundays only
+    .map((s) => {
     const teamCountByService = new Map<string, number>();
     const myAbsenceByService = new Map<string, { id: string; status: string }>();
+    const seenAbsentUsers = new Set<string>();
+    const distinctAbsentKakaks: { userId: string; name: string | null }[] = [];
     for (const a of s.absences) {
       teamCountByService.set(a.serviceId, (teamCountByService.get(a.serviceId) ?? 0) + 1);
       if (a.userId === userId) {
         myAbsenceByService.set(a.serviceId, { id: a.id, status: a.status });
+      } else if (!seenAbsentUsers.has(a.userId)) {
+        seenAbsentUsers.add(a.userId);
+        distinctAbsentKakaks.push({ userId: a.userId, name: a.user.name });
       }
     }
+    const isFullyBooked = distinctAbsentKakaks.length >= MAX_ABSENCES_PER_SUNDAY;
 
     return {
       id: s.id,
@@ -66,6 +82,9 @@ export default async function KakakDashboard() {
       title: s.title,
       notes: s.notes,
       isHoliday: s.isHoliday,
+      absentKakaks: distinctAbsentKakaks,
+      isFullyBooked,
+      myServicePlan: servicePlanMap.get(s.id) ?? null,
       churches: churches.map((c) => ({
         id: c.id,
         name: c.name,
@@ -94,8 +113,9 @@ export default async function KakakDashboard() {
         schedules={scheduleData}
         initialAbsentScheduleIds={monthlyAbsentIds}
         max={MAX_ABSENCES_PER_MONTH}
-        currentMonthKey={currentMonthKey}
+        maxPerSunday={MAX_ABSENCES_PER_SUNDAY}
         monthName={monthName}
+        hasSubmitted={hasSubmitted}
       />
     </div>
   );

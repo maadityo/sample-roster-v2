@@ -11,9 +11,9 @@ import { z } from "zod";
 const createAbsenceSchema = z.object({
   scheduleId: z.string().min(1),
   serviceId: z.string().min(1),
-  reason: z.string().max(500).optional(),
+  reason: z.string().max(500).nullable().optional(),
   isOverride: z.boolean().optional(),
-  adminNote: z.string().max(500).optional(),
+  adminNote: z.string().max(500).nullable().optional(),
 });
 
 // GET /api/absences
@@ -74,6 +74,12 @@ export async function POST(req: NextRequest) {
   if (!schedule) {
     return NextResponse.json({ error: "Schedule not found" }, { status: 404 });
   }
+  if (schedule.date.getDay() !== 0) {
+    return NextResponse.json(
+      { error: "Absences can only be submitted for Sunday schedules" },
+      { status: 400 }
+    );
+  }
   if (!service) {
     return NextResponse.json({ error: "Service not found" }, { status: 404 });
   }
@@ -96,7 +102,7 @@ export async function POST(req: NextRequest) {
     const updated = await prisma.absence.update({
       where: { id: existing.id },
       data: {
-        status: isAdmin ? "APPROVED" : "PENDING",
+        status: "APPROVED",
         reason: reason ?? null,
         adminNote: isAdmin ? (adminNote ?? null) : null,
         isOverride: isAdmin && !!isOverride,
@@ -132,19 +138,21 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Team limit is per service (not per whole Sunday)
-    const teamAbsenceCount = await prisma.absence.count({
+    // Team limit = distinct kakaks absent on this whole Sunday (all services combined)
+    const absentUsersOnSunday = await prisma.absence.findMany({
+      distinct: ["userId"],
       where: {
         scheduleId,
-        serviceId,
         status: { in: ["APPROVED", "PENDING"] },
+        userId: { not: session!.user.id },
       },
+      select: { userId: true },
     });
 
-    if (teamAbsenceCount >= MAX_ABSENCES_PER_SUNDAY && !isAdmin) {
+    if (absentUsersOnSunday.length >= MAX_ABSENCES_PER_SUNDAY && !isAdmin) {
       return NextResponse.json(
         {
-          error: `Team absence limit (${MAX_ABSENCES_PER_SUNDAY}) reached for this service`,
+          error: `Team absence limit (${MAX_ABSENCES_PER_SUNDAY}) reached for this Sunday`,
           code: "TEAM_LIMIT_EXCEEDED",
         },
         { status: 422 }
@@ -160,7 +168,7 @@ export async function POST(req: NextRequest) {
       reason: reason ?? null,
       isOverride: isAdmin && !!isOverride,
       adminNote: isAdmin ? (adminNote ?? null) : null,
-      status: isAdmin ? "APPROVED" : "PENDING",
+      status: "APPROVED",
     },
     include: { schedule: { select: { date: true, title: true } } },
   });

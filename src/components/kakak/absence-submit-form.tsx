@@ -1,219 +1,155 @@
-"use client";
+﻿"use client";
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { AbsenceStatus } from "@prisma/client";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/components/ui/toaster";
 import { cn, formatShortDate } from "@/lib/utils";
-import { CalendarDays, Loader2, Users, AlertTriangle, X, CheckCircle2 } from "lucide-react";
+import { CalendarDays, Loader2, CalendarCheck, CheckCircle2 } from "lucide-react";
 import type { ScheduleWithChurches } from "@/types";
 import { AbsenceQuotaBadge } from "@/components/kakak/absence-quota-badge";
 
 interface AbsenceSubmitFormProps {
+  /** Sundays only â€” pre-filtered by the server */
   schedules: ScheduleWithChurches[];
   initialAbsentScheduleIds: string[];
   max: number;
-  currentMonthKey: string; // "2026-03"
-  monthName: string; // "Maret"
+  monthName: string;
+  /** True when the user already has PENDING/APPROVED absences for this month */
+  hasSubmitted: boolean;
+  /** Max kakaks allowed absent per Sunday; used to render the Penuh chip */
+  maxPerSunday: number;
 }
 
-const statusConfig: Record<string, { label: string; variant: "success" | "warning" | "destructive" | "secondary" }> = {
-  APPROVED: { label: "Approved", variant: "success" },
-  PENDING: { label: "Pending", variant: "warning" },
-  REJECTED: { label: "Rejected", variant: "destructive" },
-  CANCELLED: { label: "Cancelled", variant: "secondary" },
+const statusConfig = {
+  APPROVED:  { label: "Approved",  variant: "success"     as const },
+  PENDING:   { label: "Pending",   variant: "warning"     as const },
+  REJECTED:  { label: "Rejected",  variant: "destructive" as const },
+  CANCELLED: { label: "Cancelled", variant: "secondary"   as const },
 };
 
-export function AbsenceSubmitForm({ schedules: initialSchedules, initialAbsentScheduleIds, max, currentMonthKey, monthName }: AbsenceSubmitFormProps) {
-  const [schedules, setSchedules] = useState(initialSchedules);
-  const [absentScheduleIds, setAbsentScheduleIds] = useState<Set<string>>(() => new Set(initialAbsentScheduleIds));
-  // dayChoice[scheduleId] = "YES" (ijin) | "NO" (hadir)
+export function AbsenceSubmitForm({
+  schedules,
+  initialAbsentScheduleIds,
+  max,
+  maxPerSunday,
+  monthName,
+  hasSubmitted: initialHasSubmitted,
+}: AbsenceSubmitFormProps) {
+  const [absentScheduleIds, setAbsentScheduleIds] = useState(
+    () => new Set(initialAbsentScheduleIds)
+  );
+  const [hasSubmitted, setHasSubmitted] = useState(initialHasSubmitted);
+
+  // Pre-submit state: per-Sunday choices, selected services (for TIDAK/pelayanan), reasons
   const [dayChoice, setDayChoice] = useState<Record<string, "YES" | "NO">>({});
-  // modalOpen = set of scheduleIds whose reason modal is open
-  const [modalOpen, setModalOpen] = useState<Set<string>>(new Set());
-  const [reasons, setReasons] = useState<Record<string, string>>({});
-  const [loading, setLoading] = useState<Record<string, boolean>>({});
-  const [submitError, setSubmitError] = useState<Record<string, string>>({});
-  const [cancelLoading, setCancelLoading] = useState<Record<string, boolean>>({});
-  // selectedServices[scheduleId] = set of serviceIds checked when "Tidak"
+  // selectedServices: which services the kakak will attend on "Tidak" (hadir) days.
   const [selectedServices, setSelectedServices] = useState<Record<string, Set<string>>>({});
-  // confirmedHadir = scheduleIds where user confirmed attendance
-  const [confirmedHadir, setConfirmedHadir] = useState<Set<string>>(new Set());
+  const [reasons, setReasons] = useState<Record<string, string>>({});
+  const [submitting, setSubmitting] = useState(false);
+
+  // Post-submit: per-absenceId cancel loading
+  const [cancelLoading, setCancelLoading] = useState<Record<string, boolean>>({});
 
   const { toast } = useToast();
   const router = useRouter();
 
-  function selectChoice(scheduleId: string, choice: "YES" | "NO") {
-    setDayChoice((prev) => ({ ...prev, [scheduleId]: choice }));
-    if (choice === "YES") {
-      setModalOpen((prev) => { const next = new Set(prev); next.add(scheduleId); return next; });
-      setSelectedServices((prev) => { const next = { ...prev }; delete next[scheduleId]; return next; });
-    } else {
-      setModalOpen((prev) => { const next = new Set(prev); next.delete(scheduleId); return next; });
-    }
-  }
-
-  function closeModal(scheduleId: string) {
-    setModalOpen((prev) => { const next = new Set(prev); next.delete(scheduleId); return next; });
-    setDayChoice((prev) => { const next = { ...prev }; delete next[scheduleId]; return next; });
-    setSubmitError((prev) => { const next = { ...prev }; delete next[scheduleId]; return next; });
-  }
+  // Submit is enabled when ≥1 "Ya" (absent) day is chosen and within monthly limit
+  // "Tidak" days don't create records — service picker is informational only
+  const yesEntries = Object.entries(dayChoice).filter(([, c]) => c === "YES");
+  const isOverMonthlyLimit = yesEntries.length > max;
+  const canSubmit = yesEntries.length > 0 && !isOverMonthlyLimit;
 
   function toggleService(scheduleId: string, serviceId: string) {
     setSelectedServices((prev) => {
       const current = new Set(prev[scheduleId] ?? []);
-      if (current.has(serviceId)) current.delete(serviceId);
-      else current.add(serviceId);
+      current.has(serviceId) ? current.delete(serviceId) : current.add(serviceId);
       return { ...prev, [scheduleId]: current };
     });
   }
 
-  function confirmHadir(scheduleId: string) {
-    setConfirmedHadir((prev) => { const next = new Set(prev); next.add(scheduleId); return next; });
-    setDayChoice((prev) => { const next = { ...prev }; delete next[scheduleId]; return next; });
-    setSelectedServices((prev) => { const next = { ...prev }; delete next[scheduleId]; return next; });
-    toast({ title: "Siap hadir! Terima kasih 🙏" });
-  }
+  async function handleBatchSubmit() {
+    if (!canSubmit) return;
+    setSubmitting(true);
 
-  async function handleSubmit(scheduleId: string) {
-    const schedule = schedules.find((s) => s.id === scheduleId);
-    if (!schedule) return;
-
-    // Submit for every service that doesn't already have an active absence
-    const servicesToSubmit = schedule.churches
-      .flatMap((c) => c.services)
-      .filter(
-        (svc) =>
-          !svc.myAbsence ||
-          svc.myAbsence === "CANCELLED" ||
-          svc.myAbsence === "REJECTED"
-      );
-
-    if (servicesToSubmit.length === 0) return;
-
-    setLoading((prev) => ({ ...prev, [scheduleId]: true }));
-    setSubmitError((prev) => { const next = { ...prev }; delete next[scheduleId]; return next; });
-    const reason = reasons[scheduleId] ?? "";
+    // "Ya" = absent the whole Sunday → create absence for EVERY service on that day
+    const tasks: { scheduleId: string; serviceId: string; reason: string | null }[] = [];
+    for (const [scheduleId] of yesEntries) {
+      const schedule = schedules.find((s) => s.id === scheduleId);
+      if (!schedule) continue;
+      const reason = reasons[scheduleId]?.trim() || null;
+      const allServicesOnDay = schedule.churches.flatMap((c) => c.services);
+      for (const svc of allServicesOnDay) {
+        tasks.push({ scheduleId, serviceId: svc.id, reason });
+      }
+    }
 
     try {
       const results = await Promise.allSettled(
-        servicesToSubmit.map((svc) =>
+        tasks.map(({ scheduleId, serviceId, reason }) =>
           fetch("/api/absences", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ scheduleId, serviceId: svc.id, reason }),
+            body: JSON.stringify({ scheduleId, serviceId, reason }),
           }).then(async (res) => {
             if (!res.ok) {
               const data = await res.json().catch(() => ({}));
-              throw new Error(data.error ?? "Failed");
+              throw new Error(data.error ?? "Gagal");
             }
-            return res.json() as Promise<{ id: string; serviceId: string; status: AbsenceStatus }>;
+            return res.json();
           })
         )
       );
 
-      const succeeded = results.filter(
-        (r): r is PromiseFulfilledResult<{ id: string; serviceId: string; status: AbsenceStatus }> =>
-          r.status === "fulfilled"
-      );
       const failed = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+      const succeeded = results.filter((r) => r.status === "fulfilled");
 
       if (succeeded.length > 0) {
-        setSchedules((prev) =>
-          prev.map((s) => {
-            if (s.id !== scheduleId) return s;
-            return {
-              ...s,
-              churches: s.churches.map((c) => ({
-                ...c,
-                services: c.services.map((svc) => {
-                  const match = succeeded.find((r) => r.value.serviceId === svc.id);
-                  if (!match) return svc;
-                  return {
-                    ...svc,
-                    myAbsence: match.value.status,
-                    myAbsenceId: match.value.id,
-                    absenceCount: svc.absenceCount + 1,
-                  };
-                }),
-              })),
-            };
-          })
+        setAbsentScheduleIds(
+          (prev) => new Set([...prev, ...yesEntries.map(([id]) => id)])
         );
+        setHasSubmitted(true);
 
-        // Close modal and reset choice after successful submit
-        setModalOpen((prev) => { const next = new Set(prev); next.delete(scheduleId); return next; });
-        setDayChoice((prev) => { const next = { ...prev }; delete next[scheduleId]; return next; });
+        // Save service plans for "Tidak" (hadir) days with selected services
+        const noEntries = Object.entries(dayChoice).filter(([, c]) => c === "NO");
+        const planSaves = noEntries
+          .filter(([id]) => (selectedServices[id]?.size ?? 0) > 0)
+          .map(([id]) =>
+            fetch("/api/schedule-plans", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ scheduleId: id, serviceIds: [...selectedServices[id]] }),
+            })
+          );
+        if (planSaves.length > 0) await Promise.allSettled(planSaves);
 
-        // Update local monthly quota count if this schedule is in the current month
-        const schedule = schedules.find((s) => s.id === scheduleId);
-        if (schedule && schedule.date.slice(0, 7) === currentMonthKey) {
-          setAbsentScheduleIds((prev) => new Set([...prev, scheduleId]));
-        }
-
-        toast({ title: "Ijin berhasil disubmit!" });
+        toast({ title: `Jadwal ${monthName} berhasil dikirim! 🎉` });
         router.refresh();
       }
-
       if (failed.length > 0) {
-        const firstErr = (failed[0].reason as Error).message;
-        setSubmitError((prev) => ({ ...prev, [scheduleId]: firstErr }));
-        toast({ title: firstErr, variant: "destructive" });
+        toast({
+          title: `${failed.length} gagal: ${(failed[0].reason as Error).message}`,
+          variant: "destructive",
+        });
       }
     } catch {
-      setSubmitError((prev) => ({ ...prev, [scheduleId]: "Network error, coba lagi" }));
-      toast({ title: "Network error", variant: "destructive" });
+      toast({ title: "Network error, coba lagi", variant: "destructive" });
     } finally {
-      setLoading((prev) => ({ ...prev, [scheduleId]: false }));
+      setSubmitting(false);
     }
   }
 
-  async function handleCancelDay(scheduleId: string) {
-    const schedule = schedules.find((s) => s.id === scheduleId);
-    if (!schedule) return;
-
-    // Collect all PENDING absences for this day
-    const toCancel = schedule.churches
-      .flatMap((c) => c.services)
-      .filter((svc) => svc.myAbsenceId && svc.myAbsence === "PENDING");
-
-    if (toCancel.length === 0) return;
-
-    setCancelLoading((prev) => ({ ...prev, [scheduleId]: true }));
+  async function handleCancel(scheduleId: string, absenceId: string) {
+    setCancelLoading((prev) => ({ ...prev, [absenceId]: true }));
     try {
-      await Promise.all(
-        toCancel.map((svc) =>
-          fetch(`/api/absences/${svc.myAbsenceId}`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ status: "CANCELLED" }),
-          })
-        )
-      );
-
-      setSchedules((prev) =>
-        prev.map((s) => {
-          if (s.id !== scheduleId) return s;
-          return {
-            ...s,
-            churches: s.churches.map((c) => ({
-              ...c,
-              services: c.services.map((svc) => {
-                if (!toCancel.find((t) => t.id === svc.id)) return svc;
-                return {
-                  ...svc,
-                  myAbsence: "CANCELLED" as AbsenceStatus,
-                  absenceCount: Math.max(0, svc.absenceCount - 1),
-                };
-              }),
-            })),
-          };
-        })
-      );
-
+      const res = await fetch(`/api/absences/${absenceId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "CANCELLED" }),
+      });
+      if (!res.ok) throw new Error();
       toast({ title: "Ijin dibatalkan" });
       setAbsentScheduleIds((prev) => {
         const next = new Set(prev);
@@ -222,293 +158,300 @@ export function AbsenceSubmitForm({ schedules: initialSchedules, initialAbsentSc
       });
       router.refresh();
     } catch {
-      toast({ title: "Failed to cancel", variant: "destructive" });
+      toast({ title: "Gagal membatalkan", variant: "destructive" });
     } finally {
-      setCancelLoading((prev) => ({ ...prev, [scheduleId]: false }));
+      setCancelLoading((prev) => ({ ...prev, [absenceId]: false }));
     }
   }
 
   if (schedules.length === 0) {
-    return <p className="text-center text-gray-400 py-8">No upcoming schedules</p>;
+    return (
+      <p className="text-center text-gray-400 py-8">
+        Belum ada jadwal Minggu untuk bulan {monthName}
+      </p>
+    );
   }
 
+  // â”€â”€â”€ POST-SUBMIT VIEW â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  if (hasSubmitted) {
+    return (
+      <div className="space-y-4">
+        <AbsenceQuotaBadge used={absentScheduleIds.size} max={max} monthName={monthName} />
+
+        <div className="flex items-center gap-2 text-sm text-green-700 bg-green-50 border border-green-200 rounded-xl px-4 py-3">
+          <CalendarCheck className="w-4 h-4 shrink-0" />
+          <span>
+            Jadwal <strong>{monthName}</strong> sudah disubmit
+          </span>
+        </div>
+
+        <div className="space-y-3">
+          {schedules.map((s) => {
+            const date = new Date(s.date);
+            const allServices = s.churches.flatMap((c) => c.services);
+            const activeAbsences = allServices.filter(
+              (svc) =>
+                svc.myAbsenceId &&
+                svc.myAbsence &&
+                svc.myAbsence !== "CANCELLED" &&
+                svc.myAbsence !== "REJECTED"
+            );
+
+            // Hadir: no absence record — show only the services the kakak selected (from DB)
+            if (activeAbsences.length === 0) {
+              const attendingIds = new Set(s.myServicePlan ?? []);
+              const attendingServices = allServices.filter((svc) => attendingIds.has(svc.id));
+              return (
+                <Card key={s.id} className="border-green-100">
+                  <CardContent className="p-4 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <CalendarDays className="w-4 h-4 text-blue-400" />
+                        <span className="font-semibold text-sm text-gray-900">
+                          {formatShortDate(date)}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <CheckCircle2 className="w-4 h-4 text-green-500" />
+                        <span className="text-xs font-medium text-green-600">Hadir</span>
+                      </div>
+                    </div>
+                    {attendingServices.length > 0 && (
+                      <div className="space-y-1 pl-6">
+                        {attendingServices.map((svc) => (
+                          <div key={svc.id} className="flex items-center gap-1.5">
+                            <span className="text-xs text-gray-400">{svc.time}</span>
+                            <span className="text-xs text-gray-700">{svc.name}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              );
+            }
+
+            // Ijin: has absence — show date + status badge + one Batalkan button only
+            const topStatus = activeAbsences[0].myAbsence!;
+            const hasCancellable = activeAbsences.some((svc) => svc.myAbsence === "PENDING" || svc.myAbsence === "APPROVED");
+            const firstCancellableId = activeAbsences.find((svc) => svc.myAbsence === "PENDING" || svc.myAbsence === "APPROVED")?.myAbsenceId;
+            return (
+              <Card key={s.id} className="border-red-100">
+                <CardContent className="p-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <CalendarDays className="w-4 h-4 text-red-400" />
+                      <span className="font-semibold text-sm text-gray-900">
+                        {formatShortDate(date)}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Badge
+                        variant={
+                          statusConfig[topStatus as keyof typeof statusConfig]?.variant ??
+                          "secondary"
+                        }
+                        className="text-xs"
+                      >
+                        {statusConfig[topStatus as keyof typeof statusConfig]?.label ?? topStatus}
+                      </Badge>
+                      {hasCancellable && firstCancellableId && (
+                        <button
+                          onClick={() => handleCancel(s.id, firstCancellableId)}
+                          disabled={cancelLoading[firstCancellableId] ?? false}
+                          className="text-xs text-red-500 hover:text-red-700 disabled:opacity-50"
+                        >
+                          {cancelLoading[firstCancellableId] ? "..." : "Batalkan"}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  // â”€â”€â”€ PRE-SUBMIT VIEW â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   return (
-    <>
+    <div className="space-y-4">
       <AbsenceQuotaBadge used={absentScheduleIds.size} max={max} monthName={monthName} />
 
-      <div className="space-y-4">
+      <div className="space-y-3">
         {schedules.map((s) => {
           const date = new Date(s.date);
-          const isUpcoming = date > new Date();
-          const isLoading = loading[s.id] ?? false;
-          const isCancelling = cancelLoading[s.id] ?? false;
           const choice = dayChoice[s.id];
-          const isHadir = confirmedHadir.has(s.id);
-
-          const allServices = s.churches.flatMap((c) => c.services);
-          const activeAbsences = allServices.filter(
-            (svc) => svc.myAbsenceId && svc.myAbsence !== "CANCELLED" && svc.myAbsence !== "REJECTED"
-          );
-          const isAbsentToday = activeAbsences.length > 0;
-          const dayStatus = activeAbsences[0]?.myAbsence ?? null;
-          const hasPendingToCancel = activeAbsences.some((svc) => svc.myAbsence === "PENDING");
-
-          const checkedSvcs = selectedServices[s.id] ?? new Set<string>();
-          const hasMinOne = checkedSvcs.size > 0;
 
           return (
             <Card
               key={s.id}
               className={cn(
                 "transition-all",
-                isAbsentToday && "border-blue-200",
-                isHadir && "border-green-200",
-                s.isHoliday && "border-amber-200 bg-amber-50/50"
+                choice === "YES" && "border-red-200",
+                choice === "NO" && "border-green-200"
               )}
             >
               <CardContent className="p-4 space-y-3">
-                {/* ── Day header row ── */}
+                {/* Header row */}
                 <div className="flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-2 min-w-0 flex-1">
-                    <CalendarDays className="w-4 h-4 text-blue-500 shrink-0" />
-                    <span className="font-semibold text-gray-900 text-sm">
-                      {formatShortDate(date)}
-                    </span>
-                    {s.isHoliday && <Badge variant="warning" className="text-xs">Holiday</Badge>}
-                    {s.title && (
-                      <span className="text-gray-400 text-xs truncate">{s.title}</span>
-                    )}
+                  <div className="flex items-center gap-2">
+                    <CalendarDays className="w-4 h-4 text-blue-500" />
+                    <div>
+                      <span className="font-semibold text-sm text-gray-900">
+                        {formatShortDate(date)}
+                      </span>
+                      {s.absentKakaks.length > 0 && (
+                        <p className="text-[10px] text-gray-400 mt-0.5">
+                          Ijin: {s.absentKakaks.map((k) => k.name?.split(" ")[0] ?? "?").join(", ")}
+                        </p>
+                      )}
+                    </div>
                   </div>
 
-                  {/* Right: status+cancel for already-absent, Past for old, or Ya/Tidak buttons */}
-                  <div className="flex items-center gap-2 shrink-0">
-                    {isAbsentToday && dayStatus ? (
-                      <>
-                        <Badge variant={statusConfig[dayStatus]?.variant ?? "secondary"} className="text-xs">
-                          {statusConfig[dayStatus]?.label ?? dayStatus}
-                        </Badge>
-                        {hasPendingToCancel && isUpcoming && (
-                          <button
-                            onClick={() => handleCancelDay(s.id)}
-                            disabled={isCancelling}
-                            className="text-xs text-red-500 hover:text-red-700 disabled:opacity-50"
-                          >
-                            {isCancelling ? "..." : "Batalkan"}
-                          </button>
+                  {s.isFullyBooked ? (
+                    <span className="text-xs font-medium text-orange-600 bg-orange-50 border border-orange-200 rounded-full px-3 py-1 whitespace-nowrap">
+                      Penuh ({s.absentKakaks.length}/{maxPerSunday})
+                    </span>
+                  ) : (
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs text-gray-400">Ijin?</span>
+                      <button
+                        onClick={() => {
+                          setDayChoice((prev) => ({ ...prev, [s.id]: "YES" }));
+                          // clear any "Tidak" service selection when switching to Ya
+                          setSelectedServices((prev) => {
+                            const next = { ...prev };
+                            delete next[s.id];
+                            return next;
+                          });
+                        }}
+                        className={cn(
+                          "px-3 py-1 rounded-full text-xs font-medium border transition-colors",
+                          choice === "YES"
+                            ? "bg-red-500 text-white border-red-500"
+                            : "bg-white text-red-500 border-red-300 hover:bg-red-50"
                         )}
-                      </>
-                    ) : isHadir ? (
-                      <div className="flex items-center gap-1.5">
-                        <CheckCircle2 className="w-4 h-4 text-green-500" />
-                        <span className="text-xs text-green-600 font-medium">Hadir</span>
-                        {isUpcoming && (
-                          <button
-                            onClick={() =>
-                              setConfirmedHadir((prev) => {
-                                const next = new Set(prev);
-                                next.delete(s.id);
-                                return next;
-                              })
-                            }
-                            className="text-xs text-gray-400 hover:text-gray-600 ml-1"
-                          >
-                            Ubah
-                          </button>
+                      >
+                        Ya
+                      </button>
+                      <button
+                        onClick={() => {
+                          setDayChoice((prev) => ({ ...prev, [s.id]: "NO" }));
+                          // clear reason when switching to Tidak
+                          setReasons((prev) => { const next = { ...prev }; delete next[s.id]; return next; });
+                        }}
+                        className={cn(
+                          "px-3 py-1 rounded-full text-xs font-medium border transition-colors",
+                          choice === "NO"
+                            ? "bg-green-500 text-white border-green-500"
+                            : "bg-white text-green-600 border-green-300 hover:bg-green-50"
                         )}
-                      </div>
-                    ) : !isUpcoming ? (
-                      <span className="text-xs text-gray-300">Past</span>
-                    ) : (
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-xs text-gray-400">Ijin?</span>
-                        <button
-                          onClick={() => selectChoice(s.id, "YES")}
-                          disabled={isLoading}
-                          className={cn(
-                            "px-3 py-1 rounded-full text-xs font-medium transition-colors border",
-                            choice === "YES"
-                              ? "bg-red-500 text-white border-red-500"
-                              : "bg-white text-red-500 border-red-300 hover:bg-red-50"
-                          )}
-                        >
-                          Ya
-                        </button>
-                        <button
-                          onClick={() => selectChoice(s.id, "NO")}
-                          disabled={isLoading}
-                          className={cn(
-                            "px-3 py-1 rounded-full text-xs font-medium transition-colors border",
-                            choice === "NO"
-                              ? "bg-green-500 text-white border-green-500"
-                              : "bg-white text-green-600 border-green-300 hover:bg-green-50"
-                          )}
-                        >
-                          Tidak
-                        </button>
-                      </div>
-                    )}
-                  </div>
+                      >
+                        Tidak
+                      </button>
+                    </div>
+                  )}
                 </div>
 
-                {/* ── Service checkboxes when "Tidak" selected (not yet confirmed) ── */}
-                {choice === "NO" && !isAbsentToday && (
-                  <div className="space-y-2">
+                {/* Ya selected → absent whole Sunday, just show reason field */}
+                {choice === "YES" && (
+                  <div className="space-y-2 pt-1 border-t border-red-100">
+                    <p className="text-xs text-red-600 font-medium">
+                      Ijin seharian — tidak pelayanan hari ini
+                    </p>
+                    <textarea
+                      rows={2}
+                      value={reasons[s.id] ?? ""}
+                      onChange={(e) =>
+                        setReasons((prev) => ({ ...prev, [s.id]: e.target.value }))
+                      }
+                      placeholder="Alasan ijin (opsional)..."
+                      className="w-full rounded-lg border border-gray-200 px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-red-400 resize-none"
+                    />
+                  </div>
+                )}
+
+                {/* Tidak selected → will serve, show service attendance picker */}
+                {choice === "NO" && (
+                  <div className="space-y-2 pt-1 border-t border-green-100">
                     <p className="text-xs text-gray-500">
-                      Pilih service yang kamu ikuti{" "}
-                      <span className="text-red-500">*</span>
-                      <span className="text-gray-400"> (min. 1)</span>
+                      Pilih service yang akan kamu layani:
                     </p>
                     {s.churches.map((church) => (
                       <div key={church.id}>
-                        <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">
-                          {church.name}
-                        </p>
+                        {s.churches.length > 1 && (
+                          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">
+                            {church.name}
+                          </p>
+                        )}
                         <div className="space-y-1">
                           {church.services.map((svc) => {
-                            const isChecked = checkedSvcs.has(svc.id);
-                            const full = svc.absenceCount >= 3;
+                            const isChecked = (selectedServices[s.id] ?? new Set()).has(svc.id);
                             return (
                               <label
                                 key={svc.id}
                                 className={cn(
-                                  "flex items-center justify-between rounded-md px-2.5 py-2 cursor-pointer transition-colors border",
+                                  "flex items-center gap-2.5 rounded-md px-2.5 py-2 cursor-pointer border transition-colors",
                                   isChecked
                                     ? "bg-green-50 border-green-200"
                                     : "bg-gray-50 border-transparent hover:bg-gray-100"
                                 )}
                               >
-                                <div className="flex items-center gap-2.5">
-                                  <input
-                                    type="checkbox"
-                                    checked={isChecked}
-                                    onChange={() => toggleService(s.id, svc.id)}
-                                    className="w-4 h-4 rounded border-gray-300 text-green-600 focus:ring-green-500"
-                                  />
-                                  <span className="text-xs text-gray-700">
-                                    <span className="text-gray-400 mr-1">{svc.time}</span>
-                                    {svc.name}
-                                  </span>
-                                </div>
-                                <div className="flex items-center gap-1">
-                                  <Users className="w-3 h-3 text-gray-400" />
-                                  <span className={cn("text-xs", full ? "text-red-600 font-medium" : "text-gray-400")}>
-                                    {svc.absenceCount} absent
-                                  </span>
-                                  {full && <AlertTriangle className="w-3 h-3 text-red-500" />}
-                                </div>
+                                <input
+                                  type="checkbox"
+                                  checked={isChecked}
+                                  onChange={() => toggleService(s.id, svc.id)}
+                                  className="w-4 h-4 rounded border-gray-300 text-green-600 focus:ring-green-400"
+                                />
+                                <span className="text-xs text-gray-700">
+                                  <span className="text-gray-400 mr-1">{svc.time}</span>
+                                  {svc.name}
+                                </span>
                               </label>
                             );
                           })}
                         </div>
                       </div>
                     ))}
-                    <div className="flex items-center justify-between pt-2 border-t border-gray-100">
-                      <span className="text-xs text-gray-400">
-                        {hasMinOne ? `${checkedSvcs.size} service dipilih` : "Pilih minimal 1 service"}
-                      </span>
-                      <div className="flex gap-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() =>
-                            setDayChoice((prev) => {
-                              const next = { ...prev };
-                              delete next[s.id];
-                              return next;
-                            })
-                          }
-                        >
-                          Batal
-                        </Button>
-                        <Button
-                          size="sm"
-                          disabled={!hasMinOne}
-                          onClick={() => confirmHadir(s.id)}
-                          className="bg-green-600 hover:bg-green-700 disabled:opacity-40 text-white gap-1.5"
-                        >
-                          Konfirmasi Hadir
-                        </Button>
-                      </div>
-                    </div>
                   </div>
                 )}
-
-
               </CardContent>
             </Card>
           );
         })}
       </div>
 
-      {/* ── Reason modal — rendered outside cards ── */}
-      {schedules.map((s) => {
-        const isOpen = modalOpen.has(s.id);
-        if (!isOpen) return null;
-        const isLoading = loading[s.id] ?? false;
-        const errMsg = submitError[s.id];
-        const date = new Date(s.date);
-        return (
-          <div
-            key={`modal-${s.id}`}
-            className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
-            onClick={(e) => { if (e.target === e.currentTarget) closeModal(s.id); }}
-          >
-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 space-y-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="font-semibold text-gray-900">Pengajuan Ijin</h3>
-                  <p className="text-xs text-gray-400 mt-0.5">{formatShortDate(date)}</p>
-                </div>
-                <button
-                  onClick={() => closeModal(s.id)}
-                  className="rounded-full p-1 hover:bg-gray-100 transition-colors"
-                >
-                  <X className="w-4 h-4 text-gray-400" />
-                </button>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                  Alasan ijin
-                </label>
-                <textarea
-                  rows={3}
-                  value={reasons[s.id] ?? ""}
-                  onChange={(e) =>
-                    setReasons((prev) => ({ ...prev, [s.id]: e.target.value }))
-                  }
-                  placeholder="Tulis alasan ijin kamu di sini..."
-                  className="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
-                  autoFocus
-                />
-                {errMsg && (
-                  <p className="mt-2 text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
-                    {errMsg}
-                  </p>
-                )}
-              </div>
-              <div className="flex gap-2 justify-end pt-1">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => closeModal(s.id)}
-                  disabled={isLoading}
-                >
-                  Batal
-                </Button>
-                <Button
-                  size="sm"
-                  onClick={() => handleSubmit(s.id)}
-                  disabled={isLoading}
-                  className="gap-1.5"
-                >
-                  {isLoading && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                  Submit Ijin
-                </Button>
-              </div>
-            </div>
-          </div>
-        );
-      })}
-    </>
+      {/* Over-limit error banner */}
+      {isOverMonthlyLimit && (
+        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm">
+          <p className="font-semibold text-red-700">
+            Maksimal ijin adalah <strong>{max}x</strong> sebulan.
+          </p>
+          <p className="text-xs text-red-500 mt-0.5">
+            Jika butuh lebih dari {max}x, tolong kontak Kakak Leader.
+          </p>
+        </div>
+      )}
+
+      {/* Bottom submit button */}
+      <div className="pb-4">
+        <Button
+          className="w-full gap-2"
+          disabled={!canSubmit || submitting}
+          onClick={handleBatchSubmit}
+        >
+          {submitting && <Loader2 className="w-4 h-4 animate-spin" />}
+          {submitting ? "Mengirim..." : `Kirim Jadwal ${monthName}`}
+        </Button>
+        {yesEntries.length === 0 && (
+          <p className="text-center text-xs text-gray-400 mt-2">
+            Pilih &ldquo;Ya&rdquo; untuk hari yang kamu tidak bisa hadir
+          </p>
+        )}
+      </div>
+    </div>
   );
 }

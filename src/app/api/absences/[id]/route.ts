@@ -45,13 +45,13 @@ export async function PATCH(
   const body = parsed.data;
 
   if (!isAdmin) {
-    // Kakak may only cancel their own PENDING absence
+    // Kakak may only cancel their own PENDING or APPROVED absence
     if (body.status && body.status !== "CANCELLED") {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
-    if (absence.status !== "PENDING" && body.status === "CANCELLED") {
+    if (absence.status !== "PENDING" && absence.status !== "APPROVED" && body.status === "CANCELLED") {
       return NextResponse.json(
-        { error: "Only PENDING absences can be cancelled" },
+        { error: "Only PENDING or APPROVED absences can be cancelled" },
         { status: 422 }
       );
     }

@@ -188,7 +188,7 @@ export function AdminScheduleList({ schedules }: AdminScheduleListProps) {
           className="gap-1.5"
         >
           <Plus className="w-4 h-4" />
-          Add Sunday
+          Add Service Date
         </Button>
       </div>
 
@@ -199,7 +199,7 @@ export function AdminScheduleList({ schedules }: AdminScheduleListProps) {
             <form onSubmit={handleAddSchedule} className="space-y-3">
               <div>
                 <label className="text-sm font-medium text-gray-700 block mb-1">
-                  Date (Sunday)
+                  Date
                 </label>
                 <input
                   type="date"
