@@ -22,7 +22,7 @@ interface ToastItem {
   variant?: "default" | "destructive";
 }
 
-export function Toaster() {
+export function Toaster({ children }: { children?: React.ReactNode }) {
   const [toasts, setToasts] = React.useState<ToastItem[]>([]);
 
   const toast = React.useCallback(
@@ -36,12 +36,13 @@ export function Toaster() {
 
   return (
     <ToastContext.Provider value={{ toast }}>
-      <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 w-80">
+      {children}
+      <div className="fixed bottom-4 right-4 z-[100] flex flex-col gap-2 w-80 pointer-events-none">
         {toasts.map((t) => (
           <div
             key={t.id}
             className={cn(
-              "rounded-lg p-4 shadow-lg border text-sm animate-in slide-in-from-bottom-4",
+              "rounded-lg p-4 shadow-lg border text-sm animate-in slide-in-from-bottom-4 pointer-events-auto",
               t.variant === "destructive"
                 ? "bg-red-50 border-red-200 text-red-900"
                 : "bg-white border-gray-200 text-gray-900"

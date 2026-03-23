@@ -26,32 +26,57 @@ export async function GET(req: NextRequest) {
   const fromDate = from ? new Date(from) : startOfDay(new Date());
   const toDate = to ? new Date(to) : addDays(fromDate, 90);
 
-  const schedules = await prisma.schedule.findMany({
-    where: { date: { gte: fromDate, lte: toDate } },
-    orderBy: { date: "asc" },
-    take: limit,
-    include: {
-      _count: {
-        select: {
-          absences: { where: { status: { in: ["APPROVED", "PENDING"] } } },
+  const [schedules, churches] = await Promise.all([
+    prisma.schedule.findMany({
+      where: { date: { gte: fromDate, lte: toDate } },
+      orderBy: { date: "asc" },
+      take: limit,
+      include: {
+        absences: {
+          where: { status: { in: ["APPROVED", "PENDING"] } },
+          select: { userId: true, serviceId: true, status: true, id: true },
         },
       },
-      absences: {
-        where: { userId: session!.user.id },
-        select: { status: true },
-      },
-    },
-  });
+    }),
+    prisma.church.findMany({
+      orderBy: { sortOrder: "asc" },
+      include: { services: { orderBy: { sortOrder: "asc" } } },
+    }),
+  ]);
 
-  const result = schedules.map((s) => ({
-    id: s.id,
-    date: s.date,
-    title: s.title,
-    notes: s.notes,
-    isHoliday: s.isHoliday,
-    absenceCount: s._count.absences,
-    myAbsence: s.absences[0]?.status ?? null,
-  }));
+  const userId = session!.user.id;
+
+  const result = schedules.map((s) => {
+    // Build per-service maps
+    const teamCountByService = new Map<string, number>();
+    const myAbsenceByService = new Map<string, { id: string; status: string }>();
+    for (const a of s.absences) {
+      teamCountByService.set(a.serviceId, (teamCountByService.get(a.serviceId) ?? 0) + 1);
+      if (a.userId === userId) {
+        myAbsenceByService.set(a.serviceId, { id: a.id, status: a.status });
+      }
+    }
+
+    return {
+      id: s.id,
+      date: s.date,
+      title: s.title,
+      notes: s.notes,
+      isHoliday: s.isHoliday,
+      churches: churches.map((c) => ({
+        id: c.id,
+        name: c.name,
+        services: c.services.map((svc) => ({
+          id: svc.id,
+          time: svc.time,
+          name: svc.name,
+          absenceCount: teamCountByService.get(svc.id) ?? 0,
+          myAbsence: myAbsenceByService.get(svc.id)?.status ?? null,
+          myAbsenceId: myAbsenceByService.get(svc.id)?.id ?? null,
+        })),
+      })),
+    };
+  });
 
   return NextResponse.json(result);
 }

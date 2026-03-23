@@ -78,6 +78,29 @@ model User {
   auditLogs AuditLog[]
 }
 
+/// A church location
+model Church {
+  id        String    @id @default(cuid())
+  name      String    @unique  // e.g. "Sydney City"
+  sortOrder Int       @default(0)
+
+  services  Service[]
+}
+
+/// A fixed weekly service slot at a church
+model Service {
+  id        String  @id @default(cuid())
+  churchId  String
+  time      String  // e.g. "10:00"
+  name      String  // e.g. "All Stars"
+  sortOrder Int     @default(0)
+
+  church    Church    @relation(fields: [churchId], references: [id], onDelete: Cascade)
+  absences  Absence[]
+
+  @@index([churchId])
+}
+
 /// A Sunday service date
 model Schedule {
   id          String   @id @default(cuid())
@@ -94,24 +117,27 @@ model Schedule {
   @@index([date])
 }
 
-/// A kakak's absence submission for a specific Sunday
+/// A kakak's absence for a specific service on a specific Sunday
 model Absence {
   id         String        @id @default(cuid())
   userId     String
   scheduleId String
+  serviceId  String
   status     AbsenceStatus @default(PENDING)
-  reason     String?       @db.Text
-  adminNote  String?       @db.Text  // Admin override reason
+  reason     String?       @db.Text  // Shared reason per Sunday (same across services)
+  adminNote  String?       @db.Text
   isOverride Boolean       @default(false)
   createdAt  DateTime      @default(now())
   updatedAt  DateTime      @updatedAt
 
   user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   schedule Schedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+  service  Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
 
-  @@unique([userId, scheduleId])   // One absence per kakak per Sunday
+  @@unique([userId, scheduleId, serviceId])  // One absence per kakak per service per Sunday
   @@index([userId])
   @@index([scheduleId])
+  @@index([serviceId])
   @@index([status])
 }
 

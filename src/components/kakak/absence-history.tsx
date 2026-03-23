@@ -15,6 +15,11 @@ interface AbsenceHistoryProps {
       date: Date;
       title: string | null;
     };
+    service: {
+      time: string;
+      name: string;
+      church: { name: string };
+    };
   }[];
 }
 
@@ -53,6 +58,9 @@ export function AbsenceHistory({ absences }: AbsenceHistoryProps) {
               {a.schedule.title && (
                 <p className="text-xs text-gray-500">{a.schedule.title}</p>
               )}
+              <p className="text-xs text-blue-600 font-medium">
+                {a.service.church.name} · {a.service.time} {a.service.name}
+              </p>
               {a.reason && (
                 <p className="text-xs text-gray-500 mt-1">
                   Reason: {a.reason}

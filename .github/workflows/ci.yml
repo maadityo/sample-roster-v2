@@ -1,0 +1,193 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+env:
+  NODE_VERSION: "20"
+  # Test DB — ephemeral PostgreSQL spun up by the job
+  TEST_DATABASE_URL: postgresql://kakak:kakak_secret@localhost:5432/kakak_test?schema=public
+
+jobs:
+  # ── Job 1: Lint + Type-check ──────────────────────────────────────────────
+  lint-and-typecheck:
+    name: Lint & Type-check
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type-check
+        run: npx tsc --noEmit
+
+  # ── Job 2: Vitest API Integration Tests ──────────────────────────────────
+  unit-tests:
+    name: API Integration Tests (Vitest)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: kakak
+          POSTGRES_PASSWORD: kakak_secret
+          POSTGRES_DB: kakak_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Run API tests
+        env:
+          DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
+          NEXTAUTH_SECRET: ci-test-secret-not-for-production
+          MAX_ABSENCES_PER_MONTH: "2"
+          MAX_ABSENCES_PER_SUNDAY: "3"
+        run: npm run test:unit
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage/
+          retention-days: 7
+
+  # ── Job 3: Playwright E2E Tests ───────────────────────────────────────────
+  e2e-tests:
+    name: E2E Tests (Playwright)
+    runs-on: ubuntu-latest
+    needs: [lint-and-typecheck, unit-tests]
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: kakak
+          POSTGRES_PASSWORD: kakak_secret
+          POSTGRES_DB: kakak
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Run DB migrations + seed
+        env:
+          DATABASE_URL: postgresql://kakak:kakak_secret@localhost:5432/kakak?schema=public
+        run: |
+          npx prisma migrate deploy
+          npm run db:seed
+
+      - name: Install Playwright browsers
+        run: npx playwright install chromium --with-deps
+
+      - name: Build Next.js
+        env:
+          DATABASE_URL: postgresql://kakak:kakak_secret@localhost:5432/kakak?schema=public
+          NEXTAUTH_SECRET: ci-test-secret-not-for-production
+          NEXTAUTH_URL: http://localhost:3000
+          # Disable Azure Key Vault in CI
+          AZURE_KEY_VAULT_URL: ""
+        run: npm run build
+
+      - name: Run E2E tests
+        env:
+          DATABASE_URL: postgresql://kakak:kakak_secret@localhost:5432/kakak?schema=public
+          NEXTAUTH_SECRET: ci-test-secret-not-for-production
+          NEXTAUTH_URL: http://localhost:3000
+          NEXTAUTH_TEST_MODE: "true"
+          AZURE_KEY_VAULT_URL: ""
+          PLAYWRIGHT_BASE_URL: http://localhost:3000
+        run: npm run test:e2e
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
+
+      - name: Upload Playwright screenshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-screenshots
+          path: test-results/
+          retention-days: 7
+
+  # ── Job 4: Docker Build ───────────────────────────────────────────────────
+  docker-build:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    needs: [lint-and-typecheck]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            NODE_VERSION=${{ env.NODE_VERSION }}

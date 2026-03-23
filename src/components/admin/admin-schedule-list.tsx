@@ -25,6 +25,9 @@ interface AbsentKakak {
   status: AbsenceStatus;
   reason: string | null;
   adminNote: string | null;
+  churchName: string;
+  serviceTime: string;
+  serviceName: string;
   user: { name: string | null; email: string; image: string | null };
 }
 
@@ -452,8 +455,11 @@ export function AdminScheduleList({ schedules }: AdminScheduleListProps) {
                               <p className="text-sm font-medium text-gray-900">
                                 {a.user.name ?? a.user.email}
                               </p>
+                              <p className="text-xs text-blue-600 font-medium">
+                                {a.churchName} · {a.serviceTime} {a.serviceName}
+                              </p>
                               {a.reason && (
-                                <p className="text-xs text-gray-500">
+                                <p className="text-xs text-gray-500 mt-0.5">
                                   {a.reason}
                                 </p>
                               )}

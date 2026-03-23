@@ -1,9 +1,18 @@
-import { auth } from "@/lib/auth";
+import NextAuth from "next-auth";
+import { authConfig } from "@/lib/auth.config";
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
-// Routes that don't require authentication
-const publicPaths = ["/login", "/api/auth"];
+// Gunakan auth.config.ts yang Edge-compatible (tanpa Prisma/Node.js APIs)
+const { auth } = NextAuth(authConfig);
+
+// Routes yang tidak butuh authentication
+const publicPaths = [
+  "/login",
+  "/api/auth",
+  // Test-only login route (gated by NEXTAUTH_TEST_MODE=true inside the handler)
+  "/api/test/login",
+];
 
 export default auth(function middleware(req: NextRequest & { auth: any }) {
   const { pathname } = req.nextUrl;

@@ -13,21 +13,38 @@ declare module "next-auth" {
   }
 }
 
+// ─── Church / Service shapes ─────────────────────────────────────────────────
+
+export interface ServiceSlot {
+  id: string;
+  time: string;
+  name: string;
+  absenceCount: number;
+  myAbsence: AbsenceStatus | null;
+  myAbsenceId: string | null;
+}
+
+export interface ChurchWithServices {
+  id: string;
+  name: string;
+  services: ServiceSlot[];
+}
+
 // ─── API response shapes ─────────────────────────────────────────────────────
 
-export interface ScheduleWithAbsenceCounts {
+export interface ScheduleWithChurches {
   id: string;
   date: string;
   title: string | null;
   notes: string | null;
   isHoliday: boolean;
-  absenceCount: number;
-  myAbsence: AbsenceStatus | null;
+  churches: ChurchWithServices[];
 }
 
 export interface AbsenceWithDetails {
   id: string;
   scheduleId: string;
+  serviceId: string;
   scheduleDate: string;
   status: AbsenceStatus;
   reason: string | null;
@@ -46,7 +63,7 @@ export interface KakakAbsenceSummary {
 }
 
 export interface AdminDashboardStats {
-  upcomingSchedules: ScheduleWithAbsenceCounts[];
+  upcomingSchedules: ScheduleWithChurches[];
   kakaksApproachingLimit: KakakAbsenceSummary[];
   totalKakaks: number;
 }

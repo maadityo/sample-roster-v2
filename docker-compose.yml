@@ -30,6 +30,11 @@ services:
       # Set ini dan semua secret otomatis diambil dari Azure Key Vault
       AZURE_KEY_VAULT_URL: ${AZURE_KEY_VAULT_URL:-https://akv-prod-eau-01.vault.azure.net/}
 
+      # Client ID dari User Managed Identity (umi-kakak-prod-01)
+      # Wajib diset agar DefaultAzureCredential tahu pakai identity yang mana
+      # Ambil dari: az identity show --name umi-kakak-prod-01 --query clientId -o tsv
+      AZURE_CLIENT_ID: ${AZURE_CLIENT_ID:-}
+
       # ── Database (non-secret, aman di sini untuk local) ────────
       DATABASE_URL: postgresql://kakak:kakak_secret@db:5432/kakak?schema=public
 
@@ -51,6 +56,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      target: builder   # pakai builder stage agar punya node_modules lengkap (prisma@5 + tsx)
     container_name: kakak-migrate
     environment:
       DATABASE_URL: postgresql://kakak:kakak_secret@db:5432/kakak?schema=public
@@ -58,7 +64,7 @@ services:
       db:
         condition: service_healthy
     command: >
-      sh -c "npx prisma migrate deploy && npx tsx prisma/seed.ts"
+      sh -c "node_modules/.bin/prisma migrate deploy && node_modules/.bin/tsx prisma/seed.ts"
     restart: "no"
 
 volumes:

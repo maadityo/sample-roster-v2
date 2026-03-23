@@ -14,8 +14,9 @@ const patchScheduleSchema = z.object({
 // PATCH /api/schedules/[id]  (Admin only)
 export async function PATCH(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
+  const { id } = await params;
   const { session, error } = await requireAuth();
   if (error) return error;
   if (session!.user.role !== "ADMIN") {
@@ -33,14 +34,14 @@ export async function PATCH(
   const { date, title, notes, isHoliday } = parsed.data;
 
   const existing = await prisma.schedule.findUnique({
-    where: { id: params.id },
+    where: { id },
   });
   if (!existing) {
     return NextResponse.json({ error: "Schedule not found" }, { status: 404 });
   }
 
   const updated = await prisma.schedule.update({
-    where: { id: params.id },
+    where: { id },
     data: {
       date: date ? startOfDay(new Date(date)) : undefined,
       title: title !== undefined ? title : undefined,
@@ -55,14 +56,15 @@ export async function PATCH(
 // DELETE /api/schedules/[id]  (Admin only)
 export async function DELETE(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
+  const { id } = await params;
   const { session, error } = await requireAuth();
   if (error) return error;
   if (session!.user.role !== "ADMIN") {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  await prisma.schedule.delete({ where: { id: params.id } });
+  await prisma.schedule.delete({ where: { id } });
   return new NextResponse(null, { status: 204 });
 }

@@ -11,6 +11,9 @@ export default async function MyAbsencesPage() {
     orderBy: { schedule: { date: "desc" } },
     include: {
       schedule: { select: { date: true, title: true } },
+      service: {
+        include: { church: { select: { name: true } } },
+      },
     },
     take: 50,
   });

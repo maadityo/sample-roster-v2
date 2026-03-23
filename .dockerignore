@@ -1,0 +1,25 @@
+# Deps — diinstall ulang di dalam container (Alpine Linux)
+node_modules/
+
+# Build outputs — dibuild di dalam container
+.next/
+out/
+dist/
+
+# Git
+.git/
+.gitignore
+
+# Env files — jangan masuk image
+.env
+.env.local
+.env.production
+
+# Dev tools
+.vscode/
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db

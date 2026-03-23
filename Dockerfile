@@ -4,7 +4,8 @@ RUN apk add --no-cache libc6-compat openssl
 WORKDIR /app
 
 COPY package.json package-lock.json ./
-RUN npm ci
+# Install semua deps (termasuk devDependencies) untuk proses build
+RUN npm ci --include=dev
 
 # ── Stage 2: Build the app ────────────────────────────────────────────────────
 FROM node:20-alpine AS builder
@@ -14,8 +15,8 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-# Generate Prisma client
-RUN npx prisma generate
+# Generate Prisma client (use local binary, avoid npx network calls)
+RUN PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING=1 node_modules/.bin/prisma generate
 
 # Build Next.js (standalone output)
 ENV NEXT_TELEMETRY_DISABLED=1

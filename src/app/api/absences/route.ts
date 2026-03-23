@@ -10,6 +10,7 @@ import { z } from "zod";
 
 const createAbsenceSchema = z.object({
   scheduleId: z.string().min(1),
+  serviceId: z.string().min(1),
   reason: z.string().max(500).optional(),
   isOverride: z.boolean().optional(),
   adminNote: z.string().max(500).optional(),
@@ -64,26 +65,45 @@ export async function POST(req: NextRequest) {
       { status: 400 }
     );
   }
-  const { scheduleId, reason, isOverride, adminNote } = parsed.data;
+  const { scheduleId, serviceId, reason, isOverride, adminNote } = parsed.data;
 
-  const schedule = await prisma.schedule.findUnique({
-    where: { id: scheduleId },
-  });
+  const [schedule, service] = await Promise.all([
+    prisma.schedule.findUnique({ where: { id: scheduleId } }),
+    prisma.service.findUnique({ where: { id: serviceId } }),
+  ]);
   if (!schedule) {
     return NextResponse.json({ error: "Schedule not found" }, { status: 404 });
+  }
+  if (!service) {
+    return NextResponse.json({ error: "Service not found" }, { status: 404 });
   }
 
   const isAdmin = session!.user.role === "ADMIN";
 
-  // Check for duplicate
+  // Check for duplicate per (user, schedule, service)
   const existing = await prisma.absence.findUnique({
-    where: { userId_scheduleId: { userId: session!.user.id, scheduleId } },
+    where: { userId_scheduleId_serviceId: { userId: session!.user.id, scheduleId, serviceId } },
   });
   if (existing) {
-    return NextResponse.json(
-      { error: "You already have an absence for this Sunday" },
-      { status: 409 }
-    );
+    // If the existing record is active (PENDING/APPROVED), block re-submission
+    if (existing.status === "PENDING" || existing.status === "APPROVED") {
+      return NextResponse.json(
+        { error: "You already have an absence for this service on this Sunday" },
+        { status: 409 }
+      );
+    }
+    // If CANCELLED or REJECTED, reactivate the record instead of creating a new one
+    const updated = await prisma.absence.update({
+      where: { id: existing.id },
+      data: {
+        status: isAdmin ? "APPROVED" : "PENDING",
+        reason: reason ?? null,
+        adminNote: isAdmin ? (adminNote ?? null) : null,
+        isOverride: isAdmin && !!isOverride,
+      },
+      include: { schedule: { select: { date: true, title: true } } },
+    });
+    return NextResponse.json(updated, { status: 201 });
   }
 
   // ── Business rule checks (skipped for admin override) ─────────────────────
@@ -91,13 +111,16 @@ export async function POST(req: NextRequest) {
     const monthStart = startOfMonth(schedule.date);
     const monthEnd = endOfMonth(schedule.date);
 
-    const personalMonthlyCount = await prisma.absence.count({
+    // Monthly limit = distinct Sundays (not per-service count)
+    const distinctSundaysAbsent = await prisma.absence.groupBy({
+      by: ["scheduleId"],
       where: {
         userId: session!.user.id,
         status: { in: ["APPROVED", "PENDING"] },
         schedule: { date: { gte: monthStart, lte: monthEnd } },
       },
     });
+    const personalMonthlyCount = distinctSundaysAbsent.length;
 
     if (personalMonthlyCount >= MAX_ABSENCES_PER_MONTH && !isAdmin) {
       return NextResponse.json(
@@ -109,9 +132,11 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Team limit is per service (not per whole Sunday)
     const teamAbsenceCount = await prisma.absence.count({
       where: {
         scheduleId,
+        serviceId,
         status: { in: ["APPROVED", "PENDING"] },
       },
     });
@@ -119,7 +144,7 @@ export async function POST(req: NextRequest) {
     if (teamAbsenceCount >= MAX_ABSENCES_PER_SUNDAY && !isAdmin) {
       return NextResponse.json(
         {
-          error: `Team absence limit (${MAX_ABSENCES_PER_SUNDAY}) reached for this Sunday`,
+          error: `Team absence limit (${MAX_ABSENCES_PER_SUNDAY}) reached for this service`,
           code: "TEAM_LIMIT_EXCEEDED",
         },
         { status: 422 }
@@ -131,6 +156,7 @@ export async function POST(req: NextRequest) {
     data: {
       userId: session!.user.id,
       scheduleId,
+      serviceId,
       reason: reason ?? null,
       isOverride: isAdmin && !!isOverride,
       adminNote: isAdmin ? (adminNote ?? null) : null,
@@ -146,7 +172,7 @@ export async function POST(req: NextRequest) {
         userId: session!.user.id,
         action: "OVERRIDE_ABSENCE",
         entityId: absence.id,
-        details: { reason, adminNote, scheduleId },
+        details: { reason, adminNote, scheduleId, serviceId },
       },
     });
   }

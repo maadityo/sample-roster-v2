@@ -14,13 +14,14 @@ const patchAbsenceSchema = z.object({
 // Admin: can approve/reject, update reason, add adminNote
 export async function PATCH(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
+  const { id } = await params;
   const { session, error } = await requireAuth();
   if (error) return error;
 
   const absence = await prisma.absence.findUnique({
-    where: { id: params.id },
+    where: { id },
   });
   if (!absence) {
     return NextResponse.json({ error: "Absence not found" }, { status: 404 });
@@ -57,7 +58,7 @@ export async function PATCH(
   }
 
   const updated = await prisma.absence.update({
-    where: { id: params.id },
+    where: { id },
     data: {
       status: body.status ?? undefined,
       reason: body.reason !== undefined ? body.reason : undefined,
@@ -82,14 +83,15 @@ export async function PATCH(
 // DELETE /api/absences/[id]  (Admin only)
 export async function DELETE(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
+  const { id } = await params;
   const { session, error } = await requireAuth();
   if (error) return error;
   if (session!.user.role !== "ADMIN") {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  await prisma.absence.delete({ where: { id: params.id } });
+  await prisma.absence.delete({ where: { id } });
   return new NextResponse(null, { status: 204 });
 }

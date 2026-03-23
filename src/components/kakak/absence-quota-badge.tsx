@@ -3,12 +3,14 @@ import { cn } from "@/lib/utils";
 interface AbsenceQuotaBadgeProps {
   used: number;
   max: number;
+  monthName?: string;
 }
 
-export function AbsenceQuotaBadge({ used, max }: AbsenceQuotaBadgeProps) {
+export function AbsenceQuotaBadge({ used, max, monthName }: AbsenceQuotaBadgeProps) {
   const remaining = max - used;
   const atLimit = used >= max;
   const nearLimit = !atLimit && remaining <= 1;
+  const monthLabel = monthName ? `Bulan ${monthName}` : "Bulan Ini";
 
   return (
     <div
@@ -33,10 +35,10 @@ export function AbsenceQuotaBadge({ used, max }: AbsenceQuotaBadgeProps) {
           )}
         >
           {atLimit
-            ? "Absence limit reached"
+            ? `Batas Ijin ${monthLabel} Tercapai`
             : nearLimit
-            ? "Only 1 absence left this month"
-            : "This month's absences"}
+            ? `Sisa 1 ijin ${monthLabel.toLowerCase()}`
+            : `Ijin ${monthLabel}`}
         </p>
         <p
           className={cn(
@@ -49,8 +51,8 @@ export function AbsenceQuotaBadge({ used, max }: AbsenceQuotaBadgeProps) {
           )}
         >
           {atLimit
-            ? `You've used all ${max} absences for this month`
-            : `${remaining} of ${max} remaining`}
+            ? `Kamu sudah memakai semua ${max} ijin bulan ini`
+            : `Tersisa ${remaining} dari ${max} ijin`}
         </p>
       </div>
 
