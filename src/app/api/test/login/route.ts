@@ -36,9 +36,12 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  // Encode a NextAuth JWT token (same format as prod)
+  // Encode a NextAuth JWT token (same format as prod).
+  // NextAuth v5 requires `salt` = the cookie name so the token is bound to it.
   const secret = process.env.NEXTAUTH_SECRET!;
+  const salt = "authjs.session-token"; // NextAuth v5 default cookie name
   const token = await encode({
+    salt,
     secret,
     token: {
       sub: user.id,
