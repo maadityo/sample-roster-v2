@@ -191,3 +191,163 @@ jobs:
           cache-to: type=gha,mode=max
           build-args: |
             NODE_VERSION=${{ env.NODE_VERSION }}
+
+  # ── Job 5: Deploy to Azure Container Apps ────────────────────────────────
+  # Runs only on push to main/master (not on PRs), after all tests pass.
+  # Authenticates to Azure using OIDC federated credentials — no passwords or
+  # long-lived secrets in GitHub. All app secrets (DB, OAuth, JWT) remain in
+  # Azure Key Vault and are read at runtime via User-Assigned Managed Identity.
+  #
+  # Required GitHub Secrets (identifiers only, not app secrets):
+  #   AZURE_CLIENT_ID              – App ID of service principal sp-kakak-github-actions
+  #   AZURE_TENANT_ID              – Azure Tenant ID
+  #   AZURE_SUBSCRIPTION_ID        – Azure Subscription ID
+  #   ACR_LOGIN_SERVER             – e.g. acrkakakprod01.azurecr.io
+  #   ACR_NAME                     – e.g. acrkakakprod01
+  #   CONTAINER_APP_NAME           – e.g. ca-kakak-prod-01
+  #   CONTAINER_APP_ENV_NAME       – e.g. cae-kakak-prod
+  #   RESOURCE_GROUP               – e.g. rg-kakak-prod
+  #   MANAGED_IDENTITY_CLIENT_ID   – Client ID of umi-kakak-prod-01
+  #   MANAGED_IDENTITY_RESOURCE_ID – Full resource ID of umi-kakak-prod-01
+  #   NEXTAUTH_URL                 – Public app URL, e.g. https://kakak.azurecontainerapps.io
+  #   KEY_VAULT_URL                – e.g. https://akv-prod-eau-01.vault.azure.net/
+  deploy:
+    name: Deploy to Azure Container Apps
+    runs-on: ubuntu-latest
+    needs: [e2e-tests, docker-build]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+
+    permissions:
+      id-token: write  # Required for OIDC login to Azure
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── 1. Login to Azure via OIDC (no password / client secret) ────────
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # ── 2. Login to Azure Container Registry ─────────────────────────────
+      - name: Login to ACR
+        run: az acr login --name ${{ secrets.ACR_NAME }}
+
+      # ── 3. Build & push Docker image to ACR ──────────────────────────────
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ secrets.ACR_LOGIN_SERVER }}/kakak:${{ github.sha }}
+            ${{ secrets.ACR_LOGIN_SERVER }}/kakak:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ── 4. Run DB migration via Container Apps Job ───────────────────────
+      # Uses the newly pushed image. The job runs once and exits (Manual trigger).
+      - name: Run DB migration
+        run: |
+          # Create or update the migration job definition
+          if az containerapp job show \
+               --name job-kakak-migrate \
+               --resource-group ${{ secrets.RESOURCE_GROUP }} \
+               --output none 2>/dev/null; then
+            az containerapp job update \
+              --name job-kakak-migrate \
+              --resource-group ${{ secrets.RESOURCE_GROUP }} \
+              --image ${{ secrets.ACR_LOGIN_SERVER }}/kakak:${{ github.sha }}
+          else
+            az containerapp job create \
+              --name job-kakak-migrate \
+              --resource-group ${{ secrets.RESOURCE_GROUP }} \
+              --environment ${{ secrets.CONTAINER_APP_ENV_NAME }} \
+              --trigger-type Manual \
+              --replica-timeout 300 \
+              --replica-retry-limit 1 \
+              --image ${{ secrets.ACR_LOGIN_SERVER }}/kakak:${{ github.sha }} \
+              --registry-server ${{ secrets.ACR_LOGIN_SERVER }} \
+              --mi-user-assigned ${{ secrets.MANAGED_IDENTITY_RESOURCE_ID }} \
+              --env-vars \
+                  AZURE_KEY_VAULT_URL=${{ secrets.KEY_VAULT_URL }} \
+                  AZURE_CLIENT_ID=${{ secrets.MANAGED_IDENTITY_CLIENT_ID }} \
+              --command "node_modules/.bin/prisma" \
+              --args "migrate,deploy"
+          fi
+
+          # Start migration job and wait for it to complete
+          JOB_EXECUTION=$(az containerapp job start \
+            --name job-kakak-migrate \
+            --resource-group ${{ secrets.RESOURCE_GROUP }} \
+            --query name -o tsv)
+
+          echo "Migration job execution: $JOB_EXECUTION"
+
+          # Poll until done — max 5 minutes (30 attempts × 10s interval)
+          TIMEOUT_SECONDS=300
+          POLL_INTERVAL=10
+          MAX_RETRIES=$((TIMEOUT_SECONDS / POLL_INTERVAL))
+          for i in $(seq 1 $MAX_RETRIES); do
+            STATUS=$(az containerapp job execution show \
+              --name job-kakak-migrate \
+              --resource-group ${{ secrets.RESOURCE_GROUP }} \
+              --job-execution-name "$JOB_EXECUTION" \
+              --query "properties.status" -o tsv)
+            echo "Migration status ($i/$MAX_RETRIES): $STATUS"
+            if [ "$STATUS" = "Succeeded" ]; then
+              echo "Migration completed successfully."
+              break
+            elif [ "$STATUS" = "Failed" ]; then
+              echo "Migration FAILED."
+              exit 1
+            fi
+            sleep $POLL_INTERVAL
+          done
+
+      # ── 5. Deploy new image to Container App ─────────────────────────────
+      - name: Deploy to Container App
+        run: |
+          az containerapp update \
+            --name ${{ secrets.CONTAINER_APP_NAME }} \
+            --resource-group ${{ secrets.RESOURCE_GROUP }} \
+            --image ${{ secrets.ACR_LOGIN_SERVER }}/kakak:${{ github.sha }} \
+            --set-env-vars \
+                AZURE_KEY_VAULT_URL=${{ secrets.KEY_VAULT_URL }} \
+                AZURE_CLIENT_ID=${{ secrets.MANAGED_IDENTITY_CLIENT_ID }} \
+                NEXTAUTH_URL=${{ secrets.NEXTAUTH_URL }} \
+                MAX_ABSENCES_PER_MONTH=2 \
+                MAX_ABSENCES_PER_SUNDAY=3
+
+      # ── 6. Verify deployment is healthy ───────────────────────────────────
+      - name: Verify deployment
+        run: |
+          APP_URL=$(az containerapp show \
+            --name ${{ secrets.CONTAINER_APP_NAME }} \
+            --resource-group ${{ secrets.RESOURCE_GROUP }} \
+            --query "properties.configuration.ingress.fqdn" -o tsv)
+
+          echo "App deployed to: https://$APP_URL"
+
+          # Health check — wait for app to respond (max 3 minutes)
+          TIMEOUT_SECONDS=180
+          POLL_INTERVAL=10
+          MAX_HEALTH_CHECKS=$((TIMEOUT_SECONDS / POLL_INTERVAL))
+          for i in $(seq 1 $MAX_HEALTH_CHECKS); do
+            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://$APP_URL/api/health" || echo "000")
+            echo "Health check ($i/$MAX_HEALTH_CHECKS): HTTP $HTTP_STATUS"
+            if [ "$HTTP_STATUS" = "200" ]; then
+              echo "Deployment verified successfully."
+              exit 0
+            fi
+            sleep $POLL_INTERVAL
+          done
+
+          echo "Warning: Health check did not return 200 within timeout. Check app logs."
+          exit 1
