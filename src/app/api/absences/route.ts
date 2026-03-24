@@ -102,7 +102,7 @@ export async function POST(req: NextRequest) {
     const updated = await prisma.absence.update({
       where: { id: existing.id },
       data: {
-        status: "APPROVED",
+        status: isAdmin && isOverride ? "APPROVED" : "PENDING",
         reason: reason ?? null,
         adminNote: isAdmin ? (adminNote ?? null) : null,
         isOverride: isAdmin && !!isOverride,
@@ -168,7 +168,7 @@ export async function POST(req: NextRequest) {
       reason: reason ?? null,
       isOverride: isAdmin && !!isOverride,
       adminNote: isAdmin ? (adminNote ?? null) : null,
-      status: "APPROVED",
+      status: isAdmin && isOverride ? "APPROVED" : "PENDING",
     },
     include: { schedule: { select: { date: true, title: true } } },
   });
