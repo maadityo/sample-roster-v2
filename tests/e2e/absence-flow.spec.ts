@@ -21,18 +21,17 @@ test.beforeEach(async ({ page }) => {
   // Wait for the quota badge or empty state to appear (server component loaded)
   await expect(
     page
-      .locator('[class*="bg-blue-50"], [class*="bg-yellow-50"], [class*="bg-red-50"]')
-      .first()
+      .getByText(/tersisa \d+ dari \d+ ijin/i)
+      .or(page.getByText(/batas ijin/i))
       .or(page.getByText(/belum ada jadwal/i))
   ).toBeVisible({ timeout: 15_000 });
 });
 
 test("dashboard loads and shows quota badge", async ({ page }) => {
-  const badge = page
-    .locator('[class*="bg-blue-50"], [class*="bg-yellow-50"], [class*="bg-red-50"]')
-    .first();
-  await expect(badge).toBeVisible({ timeout: 10_000 });
-  await expect(badge.getByText(/ijin/i)).toBeVisible();
+  // Quota badge text: "Tersisa N dari M ijin" or "Batas Ijin ... Tercapai" at limit
+  await expect(
+    page.getByText(/tersisa \d+ dari \d+ ijin/i).or(page.getByText(/batas ijin/i))
+  ).toBeVisible({ timeout: 10_000 });
 });
 
 test("clicking Ya shows inline reason field", async ({ page }) => {
