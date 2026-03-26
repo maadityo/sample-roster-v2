@@ -144,6 +144,22 @@ jobs:
           AZURE_KEY_VAULT_URL: ""
         run: npm run build
 
+      - name: Start Next.js server
+        env:
+          DATABASE_URL: postgresql://kakak:kakak_secret@localhost:5432/kakak?schema=public
+          NEXTAUTH_SECRET: ci-test-secret-not-for-production
+          NEXTAUTH_URL: http://localhost:3000
+          NEXTAUTH_TEST_MODE: "true"
+          AZURE_KEY_VAULT_URL: ""
+        run: |
+          npm start &
+          # Wait until the server responds
+          for i in $(seq 1 30); do
+            curl -s http://localhost:3000/api/health > /dev/null && break
+            echo "Waiting for server... ($i)"
+            sleep 2
+          done
+
       - name: Run E2E tests
         env:
           DATABASE_URL: postgresql://kakak:kakak_secret@localhost:5432/kakak?schema=public
