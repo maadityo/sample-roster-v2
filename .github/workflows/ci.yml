@@ -206,10 +206,10 @@ jobs:
   #   ACR_NAME                     – e.g. acrkakakprod01
   #   CONTAINER_APP_NAME           – e.g. ca-kakak-prod-01
   #   CONTAINER_APP_ENV_NAME       – e.g. cae-kakak-prod
-  #   RESOURCE_GROUP               – e.g. rg-kakak-prod
+  #   RESOURCE_GROUP               – e.g. rg-kakak-prod-eau
   #   MANAGED_IDENTITY_CLIENT_ID   – Client ID of umi-kakak-prod-01
   #   MANAGED_IDENTITY_RESOURCE_ID – Full resource ID of umi-kakak-prod-01
-  #   NEXTAUTH_URL                 – Public app URL, e.g. https://kakak.azurecontainerapps.io
+  #   NEXTAUTH_URL                 – Public app URL, e.g. https://ca-kakak-prod-01.<hash>.australiaeast.azurecontainerapps.io
   #   KEY_VAULT_URL                – e.g. https://akv-prod-eau-01.vault.azure.net/
   deploy:
     name: Deploy to Azure Container Apps

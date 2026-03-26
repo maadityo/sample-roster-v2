@@ -1,0 +1,40 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# scripts/.azure.local  —  LOCAL CONTEXT FILE (per machine, never committed)
+#
+# Copy this file:
+#   cp scripts/.azure.local.example scripts/.azure.local
+# Then fill in your actual values.
+#
+# The setup script reads this file if it exists, so you never need to pass
+# flags manually. Safe to have multiple copies per project:
+#   scripts/.azure.local.prod
+#   scripts/.azure.local.staging
+# Then: cp scripts/.azure.local.prod scripts/.azure.local
+#
+# Tenant/Subscription are read from `az account show` — do NOT put them here.
+# Use: az login --tenant <id>  +  az account set --subscription <name/id>
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Existing manually-created resources (fill these in) ──────────────────────
+
+# Name of your existing PostgreSQL Flexible Server
+# az postgres flexible-server list --query "[].name" -o tsv
+POSTGRES_SERVER=
+
+# GitHub repository in owner/repo format (for OIDC subject claims)
+GITHUB_REPO=maadityo/sample-roster-v2
+
+# ── Resources the script will CREATE if missing ───────────────────────────────
+# (defaults are shown — override here only if you want different names)
+
+RESOURCE_GROUP=rg-kakak-prod-eau
+KEY_VAULT=akv-prod-eau-01
+MANAGED_IDENTITY=umi-kakak-prod-01
+ACR_NAME=acrkakakprod01
+CAE_NAME=cae-kakak-prod
+CONTAINER_APP=ca-kakak-prod-01
+APP_REGISTRATION=sp-kakak-github-actions
+
+# ── Optional: override Azure CLI active subscription ─────────────────────────
+# Leave blank to use whatever `az account show` returns.
+# SUBSCRIPTION_NAME=kakak-prod
