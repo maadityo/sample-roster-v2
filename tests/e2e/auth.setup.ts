@@ -10,11 +10,14 @@ import { test as setup, expect } from "@playwright/test";
 import path from "path";
 import fs from "fs";
 
-const AUTH_FILE = path.join(__dirname, ".auth", "kakak.json");
+const AUTH_DIR = path.join(__dirname, ".auth");
+const AUTH_FILE = path.join(AUTH_DIR, "kakak.json");
 const TEST_EMAIL = "e2e-kakak@example.com";
 const BASE_URL = process.env.PLAYWRIGHT_BASE_URL ?? "http://localhost:3000";
 
 setup("authenticate as test kakak", async ({ page }) => {
+  // Ensure the auth directory exists
+  fs.mkdirSync(AUTH_DIR, { recursive: true });
   // Call the test login API to get a session JWT
   const res = await page.request.post(`${BASE_URL}/api/test/login`, {
     data: { email: TEST_EMAIL, role: "KAKAK" },

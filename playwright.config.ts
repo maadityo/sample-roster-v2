@@ -11,8 +11,6 @@ export default defineConfig({
     baseURL: process.env.PLAYWRIGHT_BASE_URL ?? "http://localhost:3000",
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
-    // Session storage / cookie file written by auth.setup.ts
-    storageState: "tests/e2e/.auth/kakak.json",
   },
 
   projects: [
@@ -20,12 +18,14 @@ export default defineConfig({
     {
       name: "auth-setup",
       testMatch: "**/auth.setup.ts",
-      use: { storageState: undefined },
     },
     // 2. All E2E tests — use saved auth state
     {
       name: "chromium",
-      use: { ...devices["Desktop Chrome"] },
+      use: {
+        ...devices["Desktop Chrome"],
+        storageState: "tests/e2e/.auth/kakak.json",
+      },
       dependencies: ["auth-setup"],
     },
   ],
