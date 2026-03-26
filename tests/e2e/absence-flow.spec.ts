@@ -1,12 +1,14 @@
 /**
  * E2E Tests — Absence submission flow
  *
- * Tests the complete user journey on the kakak dashboard:
+ * Tests the kakak dashboard batch-submit flow (AbsenceSubmitForm):
  * - Quota badge shows correct remaining count
- * - Clicking "Ya" opens the reason modal
- * - Submitting absence → quota badge decrements
- * - Clicking "Batalkan" → quota badge increments back
- * - Re-submitting after cancel → works without error
+ * - Clicking "Ya" shows inline reason field (NOT a modal)
+ * - Batch submit via "Kirim Jadwal" → post-submit view renders
+ * - Clicking "Batalkan" cancels one service absence
+ * - Page reload preserves consistent state
+ *
+ * Requires: seed data with Sunday schedules for next month
  */
 import { test, expect, type Page } from "@playwright/test";
 
@@ -16,115 +18,130 @@ test.describe.configure({ mode: "serial" });
 test.beforeEach(async ({ page }) => {
   await page.goto("/dashboard");
   await page.waitForLoadState("networkidle");
+  // Wait for the quota badge or empty state to appear (server component loaded)
+  await expect(
+    page
+      .locator('[class*="bg-blue-50"], [class*="bg-yellow-50"], [class*="bg-red-50"]')
+      .first()
+      .or(page.getByText(/belum ada jadwal/i))
+  ).toBeVisible({ timeout: 15_000 });
 });
 
 test("dashboard loads and shows quota badge", async ({ page }) => {
-  // Quota badge must be visible
-  const badge = page.locator('[class*="bg-blue-50"], [class*="bg-yellow-50"], [class*="bg-red-50"]').first();
+  const badge = page
+    .locator('[class*="bg-blue-50"], [class*="bg-yellow-50"], [class*="bg-red-50"]')
+    .first();
   await expect(badge).toBeVisible({ timeout: 10_000 });
-
-  // Must show "Ijin" in some form
-  await expect(page.getByText(/ijin/i).first()).toBeVisible();
+  await expect(badge.getByText(/ijin/i)).toBeVisible();
 });
 
-test("clicking Ya opens the Pengajuan Ijin modal", async ({ page }) => {
-  // Find first upcoming schedule with Ya button
+test("clicking Ya shows inline reason field", async ({ page }) => {
   const yaButton = page.getByRole("button", { name: "Ya" }).first();
   await expect(yaButton).toBeVisible({ timeout: 10_000 });
   await yaButton.click();
 
-  // Modal must appear
-  await expect(page.getByText("Pengajuan Ijin")).toBeVisible({ timeout: 5_000 });
-  await expect(page.getByRole("button", { name: "Submit Ijin" })).toBeVisible();
+  // Inline "Ijin seharian" section + reason textarea appear (no modal)
+  await expect(page.getByText(/ijin seharian/i).first()).toBeVisible({ timeout: 5_000 });
+  await expect(page.getByPlaceholder(/alasan ijin/i)).toBeVisible();
+
+  // Batch submit button visible at the bottom
+  await expect(page.getByRole("button", { name: /kirim jadwal/i })).toBeVisible();
 });
 
-test("closing modal resets the Ya button state", async ({ page }) => {
+test("clicking Tidak after Ya resets the day choice", async ({ page }) => {
   const yaButton = page.getByRole("button", { name: "Ya" }).first();
   await yaButton.click();
+  await expect(page.getByText(/ijin seharian/i).first()).toBeVisible();
 
-  await expect(page.getByText("Pengajuan Ijin")).toBeVisible();
+  // Switch to "Tidak"
+  await page.getByRole("button", { name: "Tidak" }).first().click();
 
-  // Click Batal to close
-  await page.getByRole("button", { name: "Batal" }).click();
-
-  // Modal must disappear
-  await expect(page.getByText("Pengajuan Ijin")).not.toBeVisible({ timeout: 3_000 });
+  // Inline absence section disappears
+  await expect(page.getByText(/ijin seharian/i)).not.toBeVisible({ timeout: 5_000 });
 });
 
-test("submitting absence decrements the quota badge", async ({ page }) => {
-  // Read initial quota number
+test("submitting absence shows post-submit view with decremented quota", async ({ page }) => {
   const remaining = await getRemaining(page);
 
-  // Submit an absence
+  // Click "Ya" on first Sunday
   const yaButton = page.getByRole("button", { name: "Ya" }).first();
   await yaButton.click();
 
-  await expect(page.getByText("Pengajuan Ijin")).toBeVisible();
+  // Fill reason
+  const textarea = page.getByPlaceholder(/alasan ijin/i);
+  if (await textarea.isVisible()) {
+    await textarea.fill("E2E test absence");
+  }
 
-  // Fill in reason (optional)
-  const textarea = page.getByPlaceholder(/tulis alasan/i);
-  await textarea.fill("E2E test absence");
+  // Submit the batch
+  const submitButton = page.getByRole("button", { name: /kirim jadwal/i });
+  await expect(submitButton).toBeEnabled({ timeout: 5_000 });
+  await submitButton.click();
 
-  // Submit
-  await page.getByRole("button", { name: "Submit Ijin" }).click();
-
-  // Modal closes
-  await expect(page.getByText("Pengajuan Ijin")).not.toBeVisible({ timeout: 8_000 });
+  // Wait for at least one absence API call to succeed
+  await page.waitForResponse(
+    (res) => res.url().includes("/api/absences") && res.status() < 400,
+    { timeout: 15_000 }
+  );
 
   // Toast success
-  await expect(page.getByText(/ijin berhasil/i)).toBeVisible({ timeout: 5_000 });
+  await expect(page.getByText(/berhasil/i)).toBeVisible({ timeout: 10_000 });
 
-  // Quota should decrease by 1
+  // Post-submit view: "sudah disubmit" banner
+  await expect(page.getByText(/sudah disubmit/i)).toBeVisible({ timeout: 10_000 });
+
+  // Reload for fresh server-rendered data, then verify quota
+  await page.reload();
+  await page.waitForLoadState("networkidle");
   const newRemaining = await getRemaining(page);
   expect(newRemaining).toBe(remaining - 1);
 
-  // The row should now show Pending + Batalkan
-  await expect(page.getByText("Pending")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Batalkan" })).toBeVisible();
+  // Post-submit row: Pending badge + Batalkan action
+  await expect(page.getByText("Pending")).toBeVisible({ timeout: 5_000 });
+  await expect(page.getByText("Batalkan")).toBeVisible({ timeout: 5_000 });
 });
 
-test("cancelling absence increments quota badge back", async ({ page }) => {
-  // There should already be a Pending absence from the previous test
-  const batalkan = page.getByRole("button", { name: "Batalkan" }).first();
+test("cancelling one absence shows confirmation toast", async ({ page }) => {
+  // Post-submit view from previous test — "Batalkan" should be visible
+  const batalkan = page.getByText("Batalkan").first();
   await expect(batalkan).toBeVisible({ timeout: 10_000 });
-
-  const remaining = await getRemaining(page);
 
   await batalkan.click();
 
-  // Toast and badge update
-  await expect(page.getByText(/ijin dibatalkan/i)).toBeVisible({ timeout: 5_000 });
+  // Wait for cancel API
+  await page.waitForResponse(
+    (res) => res.url().includes("/api/absences/") && res.request().method() === "PATCH",
+    { timeout: 10_000 }
+  );
 
-  const newRemaining = await getRemaining(page);
-  expect(newRemaining).toBe(remaining + 1);
-
-  // Row returns to Ya / Tidak buttons
-  await expect(page.getByRole("button", { name: "Ya" }).first()).toBeVisible({ timeout: 5_000 });
+  // Toast confirmation
+  await expect(page.getByText(/dibatalkan/i)).toBeVisible({ timeout: 5_000 });
 });
 
-test("re-submitting after cancel works without error", async ({ page }) => {
-  // Find the same slot (should now show Ya again after previous cancel)
-  const yaButton = page.getByRole("button", { name: "Ya" }).first();
-  await yaButton.click();
+test("page reload preserves consistent post-submit state", async ({ page }) => {
+  // After partial cancel, remaining absences keep the Sunday in "submitted" state
+  await page.reload();
+  await page.waitForLoadState("networkidle");
 
-  await expect(page.getByText("Pengajuan Ijin")).toBeVisible();
-  await page.getByRole("button", { name: "Submit Ijin" }).click();
+  // Post-submit banner still visible
+  await expect(page.getByText(/sudah disubmit/i)).toBeVisible({ timeout: 10_000 });
 
-  // Must NOT show an error about duplicate
-  await expect(page.getByText(/already have an absence/i)).not.toBeVisible({ timeout: 3_000 });
-  await expect(page.getByText(/ijin berhasil/i)).toBeVisible({ timeout: 8_000 });
-
-  // Badge decremented again
-  await expect(page.getByText("Pending")).toBeVisible();
+  // Pending badge still present (5 of 6 service absences remain)
+  await expect(page.getByText("Pending")).toBeVisible({ timeout: 5_000 });
 });
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-/** Parse the "Tersisa N dari M ijin" text into N */
+/** Parse the "Tersisa N dari M ijin" text into the remaining count */
 async function getRemaining(page: Page): Promise<number> {
-  const text = await page.getByText(/tersisa \d+ dari \d+ ijin/i).textContent({ timeout: 5_000 });
+  const badge = page.getByText(/tersisa \d+ dari \d+ ijin/i);
+  await expect(badge).toBeVisible({ timeout: 10_000 });
+
+  const text = await badge.textContent();
   if (!text) throw new Error("Quota badge text not found");
+
   const match = text.match(/tersisa (\d+)/i);
   if (!match) throw new Error(`Could not parse remaining from: "${text}"`);
+
   return parseInt(match[1], 10);
 }
