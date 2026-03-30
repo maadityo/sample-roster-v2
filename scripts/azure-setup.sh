@@ -30,9 +30,13 @@
 
 set -euo pipefail
 
+# ── Git Bash on Windows: prevent /path → C:\path conversion ──────────────────
+export MSYS_NO_PATHCONV=1
+
 # ── Defaults (can be overridden in scripts/.azure.local) ─────────────────────
 RESOURCE_GROUP="rg-kakak-prod-eau"
 KEY_VAULT="akv-prod-eau-01"
+KEY_VAULT_RG=""                  # defaults to RESOURCE_GROUP if empty
 MANAGED_IDENTITY="umi-kakak-prod-01"
 ACR_NAME="acrkakakprod01"
 CAE_NAME="cae-kakak-prod"
@@ -75,6 +79,9 @@ if [[ -z "$POSTGRES_SERVER" ]]; then
   err "POSTGRES_SERVER is not set.\n       Set it in scripts/.azure.local:\n         POSTGRES_SERVER=your-existing-server-name"
 fi
 
+# Resolve KEY_VAULT_RG — default to RESOURCE_GROUP if not set
+KEY_VAULT_RG="${KEY_VAULT_RG:-$RESOURCE_GROUP}"
+
 SUBSCRIPTION_ID=$(az account show --query id -o tsv)
 TENANT_ID=$(az account show --query tenantId -o tsv)
 CURRENT_USER_OID=$(az ad signed-in-user show --query id -o tsv)
@@ -90,8 +97,8 @@ az group show --name "$RESOURCE_GROUP" &>/dev/null \
   || err "Resource group '$RESOURCE_GROUP' not found in this subscription.\n       Create it first or switch subscription/tenant."
 
 # Verify Key Vault exists (should have been created manually)
-az keyvault show --name "$KEY_VAULT" --resource-group "$RESOURCE_GROUP" &>/dev/null \
-  || err "Key Vault '$KEY_VAULT' not found. Create it first or check RESOURCE_GROUP."
+az keyvault show --name "$KEY_VAULT" --resource-group "$KEY_VAULT_RG" &>/dev/null \
+  || err "Key Vault '$KEY_VAULT' not found in '$KEY_VAULT_RG'. Create it first or check KEY_VAULT_RG."
 
 # Verify PostgreSQL exists
 az postgres flexible-server show \
@@ -145,20 +152,20 @@ heading "2 / 6  Key Vault RBAC"
 
 KV_RESOURCE_ID=$(az keyvault show \
   --name "$KEY_VAULT" \
-  --resource-group "$RESOURCE_GROUP" \
+  --resource-group "$KEY_VAULT_RG" \
   --query id -o tsv)
 KV_URL="https://${KEY_VAULT}.vault.azure.net/"
 
 # Confirm KV is in RBAC mode (not access policies)
 KV_RBAC=$(az keyvault show \
   --name "$KEY_VAULT" \
-  --resource-group "$RESOURCE_GROUP" \
+  --resource-group "$KEY_VAULT_RG" \
   --query properties.enableRbacAuthorization -o tsv)
 if [[ "$KV_RBAC" != "true" ]]; then
   info "Enabling RBAC authorization on Key Vault..."
   az keyvault update \
     --name "$KEY_VAULT" \
-    --resource-group "$RESOURCE_GROUP" \
+    --resource-group "$KEY_VAULT_RG" \
     --enable-rbac-authorization true \
     --output none
   success "Key Vault RBAC mode enabled"
@@ -303,7 +310,7 @@ else
     --ingress external \
     --min-replicas 0 \
     --max-replicas 3 \
-    --mi-user-assigned "$MI_RESOURCE_ID" \
+    --user-assigned "$MI_RESOURCE_ID" \
     --env-vars \
         "AZURE_KEY_VAULT_URL=${KV_URL}" \
         "AZURE_CLIENT_ID=${MI_CLIENT_ID}" \
