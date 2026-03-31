@@ -271,13 +271,24 @@ jobs:
       # Uses the newly pushed image. The job runs once and exits (Manual trigger).
       - name: Run DB migration
         run: |
-          # Update the pre-created migration job with the new image, then start it.
+          # Extract vault name from KEY_VAULT_URL (https://name.vault.azure.net/ → name)
+          KV_NAME=$(echo "${{ secrets.KEY_VAULT_URL }}" | sed 's|https://||;s|\.vault\.azure\.net.*||')
+
+          # Compose DATABASE_URL from Key Vault secrets (Prisma CLI needs it directly)
+          DB_HOST=$(az keyvault secret show --vault-name "$KV_NAME" --name sc-db-kakak-ep --query value -o tsv)
+          DB_USER=$(az keyvault secret show --vault-name "$KV_NAME" --name sc-kakak-db-user --query value -o tsv)
+          DB_PASS=$(az keyvault secret show --vault-name "$KV_NAME" --name sc-kakak-db-pass --query value -o tsv)
+          DATABASE_URL="postgresql://${DB_USER}:${DB_PASS}@${DB_HOST}/kakak?schema=public"
+
+          # Update the pre-created migration job with the new image + DATABASE_URL.
           # The job is pre-created by azure-setup.sh (with registry-identity + AcrPull)
           # so CI only needs Contributor — no role-assignment permissions required.
           az containerapp job update \
             --name job-kakak-migrate \
             --resource-group ${{ secrets.RESOURCE_GROUP }} \
-            --image ${{ secrets.ACR_LOGIN_SERVER }}/kakak:${{ github.sha }}
+            --image ${{ secrets.ACR_LOGIN_SERVER }}/kakak:${{ github.sha }} \
+            --args "migrate" "deploy" \
+            --set-env-vars "DATABASE_URL=${DATABASE_URL}"
 
           # Start migration job and wait for it to complete
           JOB_EXECUTION=$(az containerapp job start \

@@ -431,6 +431,16 @@ az role assignment create \
   && success "Granted: AcrPush on $ACR_NAME (service principal)" \
   || warn "AcrPush already assigned to service principal"
 
+# Key Vault Secrets User → SP (CI reads DB secrets to compose DATABASE_URL for migrations)
+az role assignment create \
+  --assignee-object-id "$SP_OBJECT_ID" \
+  --assignee-principal-type ServicePrincipal \
+  --role "Key Vault Secrets User" \
+  --scope "$KV_RESOURCE_ID" \
+  --output none 2>/dev/null \
+  && success "Granted: Key Vault Secrets User on $KEY_VAULT (service principal)" \
+  || warn "Key Vault Secrets User already assigned to service principal"
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 NEXTAUTH_URL_VAL="https://${APP_FQDN}"
 
