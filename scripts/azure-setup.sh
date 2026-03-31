@@ -36,7 +36,7 @@ export MSYS_NO_PATHCONV=1
 # ── Defaults (can be overridden in scripts/.azure.local) ─────────────────────
 RESOURCE_GROUP="rg-kakak-prod-eau"
 KEY_VAULT="akv-prod-eau-01"
-KEY_VAULT_RG=""                  # defaults to RESOURCE_GROUP if empty
+KEY_VAULT_RG="rg-security-prod-eau"  # set explicitly — KV lives in a separate security RG
 MANAGED_IDENTITY="umi-kakak-prod-01"
 ACR_NAME="acrkakakprod01"
 CAE_NAME="cae-kakak-prod"
@@ -82,6 +82,11 @@ fi
 
 # Resolve KEY_VAULT_RG — default to RESOURCE_GROUP if not set
 KEY_VAULT_RG="${KEY_VAULT_RG:-$RESOURCE_GROUP}"
+
+if [[ "$KEY_VAULT_RG" != "$RESOURCE_GROUP" ]]; then
+  info "Key Vault RG ($KEY_VAULT_RG) differs from app RG ($RESOURCE_GROUP)"
+  info "SP and MI role assignments will be scoped to the KV in $KEY_VAULT_RG"
+fi
 
 SUBSCRIPTION_ID=$(az account show --query id -o tsv)
 TENANT_ID=$(az account show --query tenantId -o tsv)

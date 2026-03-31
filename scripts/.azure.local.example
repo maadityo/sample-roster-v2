@@ -29,7 +29,7 @@ GITHUB_REPO=maadityo/sample-roster-v2
 
 RESOURCE_GROUP=rg-kakak-prod-eau
 KEY_VAULT=akv-prod-eau-01
-KEY_VAULT_RG=                       # defaults to RESOURCE_GROUP if empty
+KEY_VAULT_RG=rg-security-prod-eau   # set if KV is in a different RG than the app
 MANAGED_IDENTITY=umi-kakak-prod-01
 ACR_NAME=acrkakakprod01
 CAE_NAME=cae-kakak-prod
