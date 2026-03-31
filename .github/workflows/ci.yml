@@ -273,6 +273,12 @@ jobs:
       # instrumentation.ts (Entra ID token → DATABASE_URL → prisma migrate deploy).
       - name: Deploy to Container App
         run: |
+          az containerapp registry set \
+            --name ${{ secrets.CONTAINER_APP_NAME }} \
+            --resource-group ${{ secrets.RESOURCE_GROUP }} \
+            --server ${{ secrets.ACR_LOGIN_SERVER }} \
+            --identity ${{ secrets.MANAGED_IDENTITY_RESOURCE_ID }}
+
           az containerapp update \
             --name ${{ secrets.CONTAINER_APP_NAME }} \
             --resource-group ${{ secrets.RESOURCE_GROUP }} \

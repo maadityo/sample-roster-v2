@@ -38,6 +38,7 @@ export MSYS_NO_PATHCONV=1
 RESOURCE_GROUP="rg-kakak-prod-eau"
 KEY_VAULT="akv-prod-eau-01"
 KEY_VAULT_RG="rg-security-prod-eau"  # set explicitly — KV lives in a separate security RG
+IDENTITY_RG="rg-identity-prod"       # set explicitly — MI lives in a separate identity RG
 MANAGED_IDENTITY="umi-kakak-prod-01"
 ACR_NAME="acrkakakprod01"
 CAE_NAME="cae-kakak-prod"
@@ -127,27 +128,27 @@ read -rp "Continue? [y/N] " _confirm
 # ── 1. Managed Identity ───────────────────────────────────────────────────────
 heading "1 / 6  Managed Identity"
 
-if az identity show --name "$MANAGED_IDENTITY" --resource-group "$RESOURCE_GROUP" &>/dev/null; then
-  warn "'$MANAGED_IDENTITY' already exists — skipping"
+if az identity show --name "$MANAGED_IDENTITY" --resource-group "$IDENTITY_RG" &>/dev/null; then
+  warn "'$MANAGED_IDENTITY' already exists in $IDENTITY_RG — skipping"
 else
   az identity create \
     --name "$MANAGED_IDENTITY" \
-    --resource-group "$RESOURCE_GROUP" \
+    --resource-group "$IDENTITY_RG" \
     --output none
-  success "Created: $MANAGED_IDENTITY"
+  success "Created: $MANAGED_IDENTITY in $IDENTITY_RG"
 fi
 
 MI_CLIENT_ID=$(az identity show \
   --name "$MANAGED_IDENTITY" \
-  --resource-group "$RESOURCE_GROUP" \
+  --resource-group "$IDENTITY_RG" \
   --query clientId -o tsv)
 MI_RESOURCE_ID=$(az identity show \
   --name "$MANAGED_IDENTITY" \
-  --resource-group "$RESOURCE_GROUP" \
+  --resource-group "$IDENTITY_RG" \
   --query id -o tsv)
 MI_PRINCIPAL_ID=$(az identity show \
   --name "$MANAGED_IDENTITY" \
-  --resource-group "$RESOURCE_GROUP" \
+  --resource-group "$IDENTITY_RG" \
   --query principalId -o tsv)
 
 info "Client ID  : $MI_CLIENT_ID"
