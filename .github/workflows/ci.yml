@@ -298,7 +298,7 @@ jobs:
 
           echo "Migration job execution: $JOB_EXECUTION"
 
-          # Poll until done — max 5 minutes (30 attempts × 10s interval)
+          # Poll until done — max 5 minutes (3 attempts × 10s interval)
           TIMEOUT_SECONDS=300
           POLL_INTERVAL=10
           MAX_RETRIES=$((TIMEOUT_SECONDS / POLL_INTERVAL))
@@ -313,7 +313,28 @@ jobs:
               echo "Migration completed successfully."
               break
             elif [ "$STATUS" = "Failed" ]; then
-              echo "Migration FAILED."
+              echo "Migration FAILED. Fetching container logs..."
+              # Try streaming logs from the replica (available if container recently exited)
+              az containerapp job logs show \
+                --name job-kakak-migrate \
+                --resource-group ${{ secrets.RESOURCE_GROUP }} \
+                --execution "$JOB_EXECUTION" \
+                --container job-kakak-migrate \
+                --follow false 2>&1 || true
+
+              # Fallback: query Log Analytics for console output
+              LOG_WORKSPACE=$(az containerapp env show \
+                --name ${{ secrets.CONTAINER_APP_ENV_NAME }} \
+                --resource-group ${{ secrets.RESOURCE_GROUP }} \
+                --query "properties.appLogsConfiguration.logAnalyticsConfiguration.customerId" -o tsv 2>/dev/null || echo "")
+              if [ -n "$LOG_WORKSPACE" ]; then
+                echo "--- Log Analytics (last 15 min) ---"
+                az monitor log-analytics query \
+                  --workspace "$LOG_WORKSPACE" \
+                  --analytics-query "ContainerAppConsoleLogs_CL | where ContainerGroupName_s contains '$JOB_EXECUTION' | project TimeGenerated, Log_s | order by TimeGenerated asc" \
+                  --timespan PT15M \
+                  -o table 2>&1 || true
+              fi
               exit 1
             fi
             sleep $POLL_INTERVAL
