@@ -21,6 +21,7 @@
 #   · OIDC credentials     master branch + pull_request
 #   · Role assignments     AcrPush (SP), AcrPull (MI), Contributor on RG (SP)
 #   · Key Vault RBAC       Secrets Officer (you), Secrets User (MI)
+#   · PostgreSQL Entra ID  Managed Identity as Entra admin (passwordless)
 #
 # ── Already exists — discovered, not recreated ────────────────────────────────
 #   · Resource Group       rg-kakak-prod-eau
@@ -41,13 +42,11 @@ MANAGED_IDENTITY="umi-kakak-prod-01"
 ACR_NAME="acrkakakprod01"
 CAE_NAME="cae-kakak-prod"
 CONTAINER_APP="ca-kakak-prod-01"
-MIGRATION_JOB="job-kakak-migrate"
 APP_REGISTRATION="sp-kakak-github-actions"
 POSTGRES_SERVER=""          # REQUIRED — set in .azure.local
 GITHUB_REPO="maadityo/sample-roster-v2"
 LOCATION="australiaeast"
 DB_NAME="kakak"
-DB_ADMIN_USER="kakakadmin"
 
 # ── Load local overrides (gitignored file, never committed) ───────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -198,8 +197,8 @@ az role assignment create \
   && success "Granted: Secrets User (managed identity)" \
   || warn "Secrets User already assigned to managed identity"
 
-# ── 3. Store PostgreSQL credentials in Key Vault ──────────────────────────────
-heading "3 / 6  PostgreSQL → Key Vault secrets"
+# ── 3. PostgreSQL Entra ID authentication (passwordless) ──────────────────────
+heading "3 / 6  PostgreSQL → Entra ID (passwordless)"
 
 PSQL_FQDN=$(az postgres flexible-server show \
   --name "$POSTGRES_SERVER" \
@@ -223,33 +222,48 @@ else
   warn "Firewall rule 'allow-azure-services' already exists"
 fi
 
-# Check whether DB secrets are already in Key Vault
-EXISTING_EP=$(az keyvault secret show \
-  --vault-name "$KEY_VAULT" \
-  --name "sc-db-kakak-ep" \
-  --query value -o tsv 2>/dev/null || echo "")
+# Verify Entra admin is set on the PostgreSQL server
+ENTRA_ADMIN_COUNT=$(az postgres flexible-server microsoft-entra-admin list \
+  --resource-group "$RESOURCE_GROUP" \
+  --server-name "$POSTGRES_SERVER" \
+  --query "length(@)" -o tsv 2>/dev/null || echo "0")
 
-if [[ -n "$EXISTING_EP" ]]; then
-  warn "KV secret 'sc-db-kakak-ep' already set — skipping DB secrets"
-  info "If you need to update the DB hostname, run:"
-  info "  az keyvault secret set --vault-name $KEY_VAULT --name sc-db-kakak-ep --value \"$PSQL_FQDN\""
+if [[ "$ENTRA_ADMIN_COUNT" -eq 0 ]]; then
+  info "Setting $MANAGED_IDENTITY as Entra admin on $POSTGRES_SERVER..."
+  az postgres flexible-server microsoft-entra-admin create \
+    --resource-group "$RESOURCE_GROUP" \
+    --server-name "$POSTGRES_SERVER" \
+    --display-name "$MANAGED_IDENTITY" \
+    --object-id "$MI_PRINCIPAL_ID" \
+    --type ServicePrincipal \
+    --output none
+  success "Entra admin set: $MANAGED_IDENTITY"
 else
-  info "The DB hostname is: $PSQL_FQDN"
-  info "You need to store sc-db-kakak-user and sc-db-kakak-pass yourself (you know the password)."
-  echo ""
-  echo "  Run these commands (replace <USER> and <PASSWORD> with your actual values):"
-  echo ""
-  echo "  az keyvault secret set --vault-name \"$KEY_VAULT\" \\"
-  echo "    --name sc-db-kakak-ep --value \"$PSQL_FQDN\""
-  echo ""
-  echo "  az keyvault secret set --vault-name \"$KEY_VAULT\" \\"
-  echo "    --name sc-kakak-db-user --value \"<DB_ADMIN_USER>\""
-  echo ""
-  echo "  az keyvault secret set --vault-name \"$KEY_VAULT\" \\"
-  echo "    --name sc-kakak-db-pass --value \"<DB_PASSWORD>\""
-  echo ""
-  read -rp "Press ENTER once you have run those commands (or CTRL+C to abort) "
+  info "Entra admin already configured on $POSTGRES_SERVER ✓"
 fi
+
+echo ""
+info "PostgreSQL FQDN: $PSQL_FQDN"
+echo ""
+echo "  Next: create the PostgreSQL role for the managed identity."
+echo "  Connect as Entra admin and run:"
+echo ""
+echo "  # Get token + connect"
+echo "  export PGPASSWORD=\$(az account get-access-token --resource-type oss-rdbms --query accessToken -o tsv)"
+echo "  psql \"host=$PSQL_FQDN dbname=postgres user=$MANAGED_IDENTITY sslmode=require\""
+echo ""
+echo "  # Then run in psql:"
+echo "  SELECT * FROM pgaadauth_create_principal_with_oid('$MANAGED_IDENTITY', '$MI_PRINCIPAL_ID', 'service', false, false);"
+echo ""
+echo "  # Switch to kakak database and grant permissions:"
+echo "  \\c kakak"
+echo "  GRANT ALL PRIVILEGES ON DATABASE kakak TO \"$MANAGED_IDENTITY\";"
+echo "  GRANT ALL ON ALL TABLES IN SCHEMA public TO \"$MANAGED_IDENTITY\";"
+echo "  GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO \"$MANAGED_IDENTITY\";"
+echo "  ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO \"$MANAGED_IDENTITY\";"
+echo "  ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO \"$MANAGED_IDENTITY\";"
+echo ""
+read -rp "Press ENTER once you have run those commands (or CTRL+C to abort) "
 
 # ── 4. Container Registry ─────────────────────────────────────────────────────
 heading "4 / 6  Container Registry"
@@ -320,6 +334,7 @@ else
     --env-vars \
         "AZURE_KEY_VAULT_URL=${KV_URL}" \
         "AZURE_CLIENT_ID=${MI_CLIENT_ID}" \
+        "POSTGRES_HOST=${PSQL_FQDN}" \
         "NEXTAUTH_URL=https://placeholder.update-after-first-deploy.example" \
         "MAX_ABSENCES_PER_MONTH=2" \
         "MAX_ABSENCES_PER_SUNDAY=3" \
@@ -332,31 +347,6 @@ APP_FQDN=$(az containerapp show \
   --query "properties.configuration.ingress.fqdn" -o tsv)
 
 info "App FQDN: $APP_FQDN"
-
-# Migration job — pre-created so CI only needs update+start (no role-assignment permissions needed)
-if az containerapp job show \
-     --name "$MIGRATION_JOB" --resource-group "$RESOURCE_GROUP" &>/dev/null; then
-  warn "Migration job '$MIGRATION_JOB' already exists — skipping"
-else
-  az containerapp job create \
-    --name "$MIGRATION_JOB" \
-    --resource-group "$RESOURCE_GROUP" \
-    --environment "$CAE_NAME" \
-    --trigger-type Manual \
-    --replica-timeout 300 \
-    --replica-retry-limit 1 \
-    --image mcr.microsoft.com/azuredocs/containerapps-helloworld:latest \
-    --registry-server "$ACR_LOGIN_SERVER" \
-    --registry-identity "$MI_RESOURCE_ID" \
-    --user-assigned "$MI_RESOURCE_ID" \
-    --env-vars \
-        "AZURE_KEY_VAULT_URL=${KV_URL}" \
-        "AZURE_CLIENT_ID=${MI_CLIENT_ID}" \
-    --command "node_modules/.bin/prisma" \
-    --args "migrate,deploy" \
-    --output none
-  success "Created migration job: $MIGRATION_JOB"
-fi
 
 # ── 6. App Registration + OIDC + Role assignments ─────────────────────────────
 heading "6 / 6  App Registration & OIDC"
@@ -436,16 +426,6 @@ az role assignment create \
   && success "Granted: AcrPush on $ACR_NAME (service principal)" \
   || warn "AcrPush already assigned to service principal"
 
-# Key Vault Secrets User → SP (CI reads DB secrets to compose DATABASE_URL for migrations)
-az role assignment create \
-  --assignee-object-id "$SP_OBJECT_ID" \
-  --assignee-principal-type ServicePrincipal \
-  --role "Key Vault Secrets User" \
-  --scope "$KV_RESOURCE_ID" \
-  --output none 2>/dev/null \
-  && success "Granted: Key Vault Secrets User on $KEY_VAULT (service principal)" \
-  || warn "Key Vault Secrets User already assigned to service principal"
-
 # ── Summary ───────────────────────────────────────────────────────────────────
 NEXTAUTH_URL_VAL="https://${APP_FQDN}"
 
@@ -456,7 +436,7 @@ echo "╚═══════════════════════�
 
 echo ""
 echo "┌───────────────────────────────────────────────────────────────────────┐"
-echo "│  STEP A — Add these 12 values as GitHub Actions Secrets              │"
+echo "│  STEP A — Add these 11 values as GitHub Actions Secrets              │"
 echo "│  Repo → Settings → Secrets and variables → Actions                  │"
 echo "└───────────────────────────────────────────────────────────────────────┘"
 echo ""
@@ -469,10 +449,10 @@ printf "  %-35s  %s\n" "ACR_NAME"                      "$ACR_NAME"
 printf "  %-35s  %s\n" "ACR_LOGIN_SERVER"              "$ACR_LOGIN_SERVER"
 printf "  %-35s  %s\n" "RESOURCE_GROUP"                "$RESOURCE_GROUP"
 printf "  %-35s  %s\n" "CONTAINER_APP_NAME"            "$CONTAINER_APP"
-printf "  %-35s  %s\n" "CONTAINER_APP_ENV_NAME"        "$CAE_NAME"
 printf "  %-35s  %s\n" "MANAGED_IDENTITY_CLIENT_ID"    "$MI_CLIENT_ID"
 printf "  %-35s  %s\n" "MANAGED_IDENTITY_RESOURCE_ID"  "$MI_RESOURCE_ID"
 printf "  %-35s  %s\n" "KEY_VAULT_URL"                 "$KV_URL"
+printf "  %-35s  %s\n" "POSTGRES_HOST"                 "$PSQL_FQDN"
 printf "  %-35s  %s\n" "NEXTAUTH_URL"                  "$NEXTAUTH_URL_VAL"
 echo ""
 
