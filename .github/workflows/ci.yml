@@ -273,6 +273,12 @@ jobs:
       # instrumentation.ts (Entra ID token → DATABASE_URL → prisma migrate deploy).
       - name: Deploy to Container App
         run: |
+          # Ensure the correct user-assigned managed identity is attached
+          az containerapp identity assign \
+            --name ${{ secrets.CONTAINER_APP_NAME }} \
+            --resource-group ${{ secrets.RESOURCE_GROUP }} \
+            --user-assigned ${{ secrets.MANAGED_IDENTITY_RESOURCE_ID }}
+
           az containerapp registry set \
             --name ${{ secrets.CONTAINER_APP_NAME }} \
             --resource-group ${{ secrets.RESOURCE_GROUP }} \
