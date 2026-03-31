@@ -289,6 +289,7 @@ jobs:
             --name ${{ secrets.CONTAINER_APP_NAME }} \
             --resource-group ${{ secrets.RESOURCE_GROUP }} \
             --image ${{ secrets.ACR_LOGIN_SERVER }}/kakak:${{ github.sha }} \
+            --ingress-target-port 3000 \
             --set-env-vars \
                 AZURE_KEY_VAULT_URL=${{ secrets.KEY_VAULT_URL }} \
                 AZURE_CLIENT_ID=${{ secrets.MANAGED_IDENTITY_CLIENT_ID }} \

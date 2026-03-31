@@ -327,7 +327,7 @@ else
     --resource-group "$RESOURCE_GROUP" \
     --environment "$CAE_NAME" \
     --image mcr.microsoft.com/azuredocs/containerapps-helloworld:latest \
-    --target-port 80 \
+    --target-port 3000 \
     --ingress external \
     --min-replicas 0 \
     --max-replicas 3 \
