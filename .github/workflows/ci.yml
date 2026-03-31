@@ -290,7 +290,8 @@ jobs:
               --replica-retry-limit 1 \
               --image ${{ secrets.ACR_LOGIN_SERVER }}/kakak:${{ github.sha }} \
               --registry-server ${{ secrets.ACR_LOGIN_SERVER }} \
-              --mi-user-assigned ${{ secrets.MANAGED_IDENTITY_RESOURCE_ID }} \
+              --registry-identity ${{ secrets.MANAGED_IDENTITY_RESOURCE_ID }} \
+              --user-assigned ${{ secrets.MANAGED_IDENTITY_RESOURCE_ID }} \
               --env-vars \
                   AZURE_KEY_VAULT_URL=${{ secrets.KEY_VAULT_URL }} \
                   AZURE_CLIENT_ID=${{ secrets.MANAGED_IDENTITY_CLIENT_ID }} \
