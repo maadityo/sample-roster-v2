@@ -41,6 +41,7 @@ MANAGED_IDENTITY="umi-kakak-prod-01"
 ACR_NAME="acrkakakprod01"
 CAE_NAME="cae-kakak-prod"
 CONTAINER_APP="ca-kakak-prod-01"
+MIGRATION_JOB="job-kakak-migrate"
 APP_REGISTRATION="sp-kakak-github-actions"
 POSTGRES_SERVER=""          # REQUIRED — set in .azure.local
 GITHUB_REPO="maadityo/sample-roster-v2"
@@ -326,6 +327,31 @@ APP_FQDN=$(az containerapp show \
   --query "properties.configuration.ingress.fqdn" -o tsv)
 
 info "App FQDN: $APP_FQDN"
+
+# Migration job — pre-created so CI only needs update+start (no role-assignment permissions needed)
+if az containerapp job show \
+     --name "$MIGRATION_JOB" --resource-group "$RESOURCE_GROUP" &>/dev/null; then
+  warn "Migration job '$MIGRATION_JOB' already exists — skipping"
+else
+  az containerapp job create \
+    --name "$MIGRATION_JOB" \
+    --resource-group "$RESOURCE_GROUP" \
+    --environment "$CAE_NAME" \
+    --trigger-type Manual \
+    --replica-timeout 300 \
+    --replica-retry-limit 1 \
+    --image mcr.microsoft.com/azuredocs/containerapps-helloworld:latest \
+    --registry-server "$ACR_LOGIN_SERVER" \
+    --registry-identity "$MI_RESOURCE_ID" \
+    --user-assigned "$MI_RESOURCE_ID" \
+    --env-vars \
+        "AZURE_KEY_VAULT_URL=${KV_URL}" \
+        "AZURE_CLIENT_ID=${MI_CLIENT_ID}" \
+    --command "node_modules/.bin/prisma" \
+    --args "migrate,deploy" \
+    --output none
+  success "Created migration job: $MIGRATION_JOB"
+fi
 
 # ── 6. App Registration + OIDC + Role assignments ─────────────────────────────
 heading "6 / 6  App Registration & OIDC"
