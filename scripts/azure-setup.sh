@@ -343,6 +343,29 @@ else
   success "Created placeholder Container App: $CONTAINER_APP"
 fi
 
+# Set Key Vault secret references (resolved by MI at container start).
+# Edge middleware needs AUTH_SECRET as an OS-level env var before any code runs.
+info "Setting Key Vault secret references on Container App..."
+az containerapp secret set \
+  --name "$CONTAINER_APP" \
+  --resource-group "$RESOURCE_GROUP" \
+  --secrets \
+    "auth-secret=keyvaultref:${KV_URL}secrets/sc-nextauth-kakak-sec,identityref:${MI_RESOURCE_ID}" \
+    "google-client-id=keyvaultref:${KV_URL}secrets/sc-goauth-client-id,identityref:${MI_RESOURCE_ID}" \
+    "google-client-secret=keyvaultref:${KV_URL}secrets/sc-goauth-client-sc,identityref:${MI_RESOURCE_ID}" \
+  --output none
+success "Key Vault secret references set"
+
+az containerapp update \
+  --name "$CONTAINER_APP" \
+  --resource-group "$RESOURCE_GROUP" \
+  --set-env-vars \
+    "AUTH_SECRET=secretref:auth-secret" \
+    "GOOGLE_CLIENT_ID=secretref:google-client-id" \
+    "GOOGLE_CLIENT_SECRET=secretref:google-client-secret" \
+  --output none
+success "Mapped secret refs to env vars (AUTH_SECRET, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET)"
+
 APP_FQDN=$(az containerapp show \
   --name "$CONTAINER_APP" --resource-group "$RESOURCE_GROUP" \
   --query "properties.configuration.ingress.fqdn" -o tsv)

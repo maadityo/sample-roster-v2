@@ -211,11 +211,11 @@ jobs:
   # ── Job 5: Deploy to Azure Container Apps ────────────────────────────────
   # Runs only on push to main/master (not on PRs), after all tests pass.
   # Authenticates to Azure using OIDC federated credentials — no passwords or
-  # long-lived secrets in GitHub. All app secrets (OAuth, JWT) remain in
-  # Azure Key Vault. Database uses Entra ID passwordless auth via Managed Identity.
-  # Prisma migrations run automatically at container startup (instrumentation.ts).
+  # long-lived secrets in GitHub. Database uses Entra ID passwordless auth via
+  # Managed Identity. App secrets (AUTH_SECRET, Google OAuth) are stored as
+  # Container Apps secrets (encrypted at rest), sourced from GitHub Secrets.
   #
-  # Required GitHub Secrets (identifiers only, not app secrets):
+  # Required GitHub Secrets:
   #   AZURE_CLIENT_ID              – App ID of service principal sp-kakak-github-actions
   #   AZURE_TENANT_ID              – Azure Tenant ID
   #   AZURE_SUBSCRIPTION_ID        – Azure Subscription ID
@@ -225,8 +225,10 @@ jobs:
   #   RESOURCE_GROUP               – e.g. rg-kakak-prod-eau
   #   MANAGED_IDENTITY_CLIENT_ID   – Client ID of umi-kakak-prod-01
   #   MANAGED_IDENTITY_RESOURCE_ID – Full resource ID of umi-kakak-prod-01
-  #   NEXTAUTH_URL                 – Public app URL, e.g. https://ca-kakak-prod-01.<hash>.australiaeast.azurecontainerapps.io
-  #   KEY_VAULT_URL                – e.g. https://akv-prod-eau-01.vault.azure.net/
+  #   NEXTAUTH_URL                 – Public app URL
+  #   NEXTAUTH_SECRET              – Random JWT signing secret
+  #   GOOGLE_CLIENT_ID             – Google OAuth client ID
+  #   GOOGLE_CLIENT_SECRET         – Google OAuth client secret
   #   POSTGRES_HOST                – e.g. spgsql-prod-eau.postgres.database.azure.com
   deploy:
     name: Deploy to Azure Container Apps
@@ -269,8 +271,9 @@ jobs:
           cache-to: type=gha,mode=max
 
       # ── 4. Deploy new image to Container App ─────────────────────────────
-      # Prisma migrations run automatically at container startup via
-      # instrumentation.ts (Entra ID token → DATABASE_URL → prisma migrate deploy).
+      # App secrets stored as Container Apps secrets (encrypted at rest).
+      # Database auth via Managed Identity Entra ID token (instrumentation.ts).
+      # Prisma migrations run automatically at container startup.
       - name: Deploy to Container App
         run: |
           # Ensure the correct user-assigned managed identity is attached
@@ -285,12 +288,23 @@ jobs:
             --server ${{ secrets.ACR_LOGIN_SERVER }} \
             --identity ${{ secrets.MANAGED_IDENTITY_RESOURCE_ID }}
 
+          # Store app secrets as plain Container Apps secrets (encrypted at rest)
+          az containerapp secret set \
+            --name ${{ secrets.CONTAINER_APP_NAME }} \
+            --resource-group ${{ secrets.RESOURCE_GROUP }} \
+            --secrets \
+              "auth-secret=${{ secrets.NEXTAUTH_SECRET }}" \
+              "google-client-id=${{ secrets.GOOGLE_CLIENT_ID }}" \
+              "google-client-secret=${{ secrets.GOOGLE_CLIENT_SECRET }}"
+
           az containerapp update \
             --name ${{ secrets.CONTAINER_APP_NAME }} \
             --resource-group ${{ secrets.RESOURCE_GROUP }} \
             --image ${{ secrets.ACR_LOGIN_SERVER }}/kakak:${{ github.sha }} \
             --set-env-vars \
-                AZURE_KEY_VAULT_URL=${{ secrets.KEY_VAULT_URL }} \
+                AUTH_SECRET=secretref:auth-secret \
+                GOOGLE_CLIENT_ID=secretref:google-client-id \
+                GOOGLE_CLIENT_SECRET=secretref:google-client-secret \
                 AZURE_CLIENT_ID=${{ secrets.MANAGED_IDENTITY_CLIENT_ID }} \
                 POSTGRES_HOST=${{ secrets.POSTGRES_HOST }} \
                 NEXTAUTH_URL=${{ secrets.NEXTAUTH_URL }} \
